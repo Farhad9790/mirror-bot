@@ -1,0 +1,114 @@
+name: Telegram Mirror Bot
+
+on:
+  schedule:
+    # Every 5 hours. The job runs for ~4h45m, so there is a small gap between runs.
+    - cron: "0 */5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: telegram-mirror-bot
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+
+    env:
+      PYTHONUNBUFFERED: "1"
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      ALLOWED_USER_IDS: ${{ secrets.ALLOWED_USER_IDS }}
+      GOFILE_TOKEN: ${{ secrets.GOFILE_TOKEN }}
+      PIXELDRAIN_API_KEY: ${{ secrets.PIXELDRAIN_API_KEY }}
+      DEFAULT_HOST: ${{ vars.DEFAULT_HOST || 'gofile' }}
+      MAX_FILE_SIZE: ${{ vars.MAX_FILE_SIZE || '8G' }}
+      MAX_CONCURRENT_JOBS: ${{ vars.MAX_CONCURRENT_JOBS || '1' }}
+      MULTI_FILE_MODE: ${{ vars.MULTI_FILE_MODE || 'largest' }}
+      JOB_TIMEOUT: ${{ vars.JOB_TIMEOUT || '7200' }}
+      YTDLP_FORMAT: ${{ vars.YTDLP_FORMAT || 'bv*+ba/b' }}
+      BOT_RUN_SECONDS: "17100"
+      DOWNLOAD_DIR: ${{ runner.temp }}/mirror-downloads
+      STATE_FILE: .state/telegram.json
+      LOG_LEVEL: INFO
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install system tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq aria2 ffmpeg
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Show runner disk
+        run: df -h /
+
+      - name: Run bot
+        run: python -m bot
+
+      - name: Persist Telegram update offset
+        if: always()
+        run: |
+          set -e
+          BRANCH="${{ github.ref_name }}"
+
+          # Keep the bot's offset if this run received updates.
+          STATE_BACKUP=""
+          if [ -f .state/telegram.json ]; then
+            STATE_BACKUP="$(mktemp)"
+            cp .state/telegram.json "$STATE_BACKUP"
+          fi
+
+          git checkout -B "$BRANCH"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Always put the tiny state commit on top of the current remote branch.
+          # The runner is ephemeral, so discarding local changes is safe here.
+          for attempt in 1 2 3; do
+            git fetch origin "$BRANCH"
+            git reset --hard "origin/$BRANCH"
+            mkdir -p .state
+
+            # Weekly heartbeat: GitHub disables scheduled workflows after 60
+            # days without repository activity, even if the bot is idle.
+            date -u +%Y-W%V > .state/heartbeat.txt
+            git add -f .state/heartbeat.txt
+
+            if [ -n "$STATE_BACKUP" ]; then
+              cp "$STATE_BACKUP" .state/telegram.json
+              git add -f .state/telegram.json
+            fi
+
+            if git diff --cached --quiet; then
+              echo "Nothing to persist."
+              exit 0
+            fi
+
+            git commit -m "chore: update bot state [skip ci]"
+
+            if git push origin "HEAD:$BRANCH"; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Could not push the state file." >&2
+          exit 1
+
+      - name: Clean downloads
+        if: always()
+        run: rm -rf "${{ runner.temp }}/mirror-downloads"

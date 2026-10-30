@@ -1,0 +1,26 @@
+# Secrets
+.env
+*.session
+*.session-journal
+
+# Runtime data
+downloads/
+.state/
+*.part
+*.aria2
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
