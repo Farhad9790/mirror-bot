@@ -1,11 +1,11 @@
 # Telegram Mirror Bot
 
-A Telegram bot that takes a link, downloads the file, and re-uploads it to **Gofile**.
+A Telegram bot that takes a link or a file, downloads it if needed, and re-uploads it to **Gofile**.
 
-It handles direct file links, web pages where the file is hidden behind a "Download" button, video sites supported by yt-dlp, magnet links, and `.torrent` files.
+It handles direct file links, web pages where the file is hidden behind a "Download" button, video sites supported by yt-dlp, magnet links, `.torrent` files, and files sent directly in Telegram.
 
 ```
-Telegram link / .torrent
+Telegram link / .torrent / file
           │
           ▼
    Resolver (HTML buttons, meta refresh, data-url, JSON-LD, Google Drive, GitHub releases…)
@@ -27,6 +27,7 @@ Telegram link / .torrent
 - Special handling for Google Drive single files, Dropbox, Pixeldrain links, Gofile share links, MediaFire-style buttons, and GitHub releases.
 - Video sites through yt-dlp (YouTube, Vimeo, TikTok, X/Twitter, Reddit, etc.).
 - Magnet links and `.torrent` files through aria2c (DHT enabled, seeding disabled).
+- Files sent directly in Telegram — documents, photos, video, audio, voice notes, animations and stickers — are uploaded to Gofile. Telegram's cloud Bot API limits bot downloads to 20 MB per attachment.
 - Gofile share links (`gofile.io/d/...`) resolve through Gofile's API using a temporary guest token. Folder links are supported; the bot downloads the largest file or every file in `MULTI_FILE_MODE=zip`.
 - Gofile guest uploads work with no account. An optional `GOFILE_TOKEN` uses your account.
 - Progress bars, cancel buttons, per-user job limits, size limits and timeouts.
@@ -66,7 +67,7 @@ Telegram link / .torrent
 
 5. **Enable Actions and run it.** Open the **Actions** tab → **Telegram Mirror Bot** → **Run workflow**. Wait for the job to start, then send your bot a link.
 
-6. **Send a link.** The bot downloads the file, uploads it to Gofile, and replies with the public link.
+6. **Send a link or a file.** The bot downloads the file if needed, uploads it to Gofile, and replies with the public link.
 
 ### GitHub Actions limitations
 
@@ -159,13 +160,14 @@ The image includes aria2 and ffmpeg. Downloads and state live in `/data`.
 | `/cancel` | Cancel your active jobs |
 | `/id` | Show your Telegram user/chat ID |
 
-You can also send a link, a magnet link, or a `.torrent` file directly.
+You can also send a link, a magnet link, a `.torrent` file, or any file directly. Files sent in Telegram are uploaded to Gofile; cloud bots can download attachments up to 20 MB.
 
 ## Supported links
 
 | Source | Support |
 |---|---|
 | Direct file URLs (any type: `.zip`, `.iso`, `.apk`, `.pdf`, `.mp3`, `.mp4`, …) | ✅ aria2c |
+| Files sent to the bot in Telegram (documents, photos, video, audio, voice, stickers) | ✅ direct upload, ≤20 MB |
 | Pages with a Download button | ✅ heuristic resolver |
 | GitHub releases | ✅ GitHub API picks the first asset |
 | Google Drive single files | ✅ converted to a direct download URL |
@@ -185,6 +187,8 @@ The resolver is intentionally best-effort. Sites that build download links in Ja
 ## Troubleshooting
 
 **"That page does not expose a direct file"** — the page needs a login, CAPTCHA, or JavaScript that the resolver cannot execute. Try the original file URL.
+
+**A file sent in Telegram is rejected as too large** — Telegram's cloud Bot API only lets bots download attachments up to 20 MB. Send a direct link to the file instead; the bot can then mirror files up to `MAX_FILE_SIZE`.
 
 **Gofile says the token is rejected** — remove `GOFILE_TOKEN` to use guest uploads, or create a fresh token from your Gofile profile.
 

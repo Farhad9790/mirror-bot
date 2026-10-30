@@ -40,8 +40,8 @@ class Job:
     chat_id: int
     source: str
     host: str
-    source_kind: str = "url"  # url | torrent_file
-    torrent_path: Optional[Path] = None
+    source_kind: str = "url"  # url | torrent_file | telegram_file
+    local_path: Optional[Path] = None
     status: str = "queued"
     stage: str = "queued"
     percent: Optional[float] = None
@@ -168,60 +168,73 @@ class JobManager:
         job.cancel.check()
         workdir = safe_workdir(self.settings.download_dir, job.id)
         try:
-            if job.source_kind == "torrent_file":
-                if not job.torrent_path or not job.torrent_path.exists():
-                    raise DownloadError("The uploaded .torrent file is no longer available.")
-                link = ResolvedLink(
-                    url=str(job.torrent_path.resolve()),
-                    filename=job.torrent_path.name,
-                    kind="torrent",
-                )
+            if job.source_kind == "telegram_file":
+                if not job.local_path or not job.local_path.exists():
+                    raise DownloadError("The Telegram file is no longer available.")
+                file_path = job.local_path
+                file_size = file_path.stat().st_size
+                extras = 0
+                if file_size == 0:
+                    raise DownloadError("The Telegram file is empty.")
+                if file_size > self.settings.max_file_size:
+                    raise FileTooLarge(
+                        f"The file is {human_size(file_size)}, above the "
+                        f"{human_size(self.settings.max_file_size)} limit."
+                    )
             else:
-                job.update(stage="resolving", detail="Looking for the direct link…")
-                resolver = Resolver(
-                    allow_private_urls=self.settings.allow_private_urls,
-                    gofile_token=self.settings.gofile_token,
+                if job.source_kind == "torrent_file":
+                    if not job.local_path or not job.local_path.exists():
+                        raise DownloadError("The uploaded .torrent file is no longer available.")
+                    link = ResolvedLink(
+                        url=str(job.local_path.resolve()),
+                        filename=job.local_path.name,
+                        kind="torrent",
+                    )
+                else:
+                    job.update(stage="resolving", detail="Looking for the direct link…")
+                    resolver = Resolver(
+                        allow_private_urls=self.settings.allow_private_urls,
+                        gofile_token=self.settings.gofile_token,
+                    )
+                    try:
+                        link = resolver.resolve(job.source)
+                    except NoFallbackResolutionError:
+                        raise
+                    except ResolutionError as exc:
+                        logger.info("Resolution failed (%s); trying yt-dlp", type(exc).__name__)
+                        job.update(stage="resolving", detail="Trying the video extractor…")
+                        link = ResolvedLink(url=job.source, kind="ytdlp")
+
+                job.cancel.check()
+                if not link.parts and link.size and link.size > self.settings.max_file_size:
+                    raise FileTooLarge(
+                        f"The file is {human_size(link.size)}, above the "
+                        f"{human_size(self.settings.max_file_size)} limit."
+                    )
+
+                job.update(stage="downloading", percent=0.0, detail="Starting download…")
+                downloader = Downloader(self.settings, job.cancel)
+                downloaded = downloader.download(
+                    original_url=job.source,
+                    link=link,
+                    dest=workdir / "files",
+                    progress=lambda percent, detail: job.update(
+                        stage="downloading", percent=percent, detail=detail
+                    ),
                 )
-                try:
-                    link = resolver.resolve(job.source)
-                except NoFallbackResolutionError:
-                    raise
-                except ResolutionError as exc:
-                    logger.info("Resolution failed (%s); trying yt-dlp", type(exc).__name__)
-                    job.update(stage="resolving", detail="Trying the video extractor…")
-                    link = ResolvedLink(url=job.source, kind="ytdlp")
 
-            job.cancel.check()
-            if not link.parts and link.size and link.size > self.settings.max_file_size:
-                raise FileTooLarge(
-                    f"The file is {human_size(link.size)}, above the "
-                    f"{human_size(self.settings.max_file_size)} limit."
-                )
+                if downloaded.size == 0:
+                    raise DownloadError("The downloaded file is empty.")
+                if downloaded.size > self.settings.max_file_size:
+                    raise FileTooLarge(
+                        f"The file is {human_size(downloaded.size)}, above the "
+                        f"{human_size(self.settings.max_file_size)} limit."
+                    )
+                file_path = downloaded.path
+                file_size = downloaded.size
+                extras = downloaded.extras
 
-            job.update(stage="downloading", percent=0.0, detail="Starting download…")
-            downloader = Downloader(self.settings, job.cancel)
-            downloaded = downloader.download(
-                original_url=job.source,
-                link=link,
-                dest=workdir / "files",
-                progress=lambda percent, detail: job.update(
-                    stage="downloading", percent=percent, detail=detail
-                ),
-            )
-
-            if downloaded.size == 0:
-                raise DownloadError("The downloaded file is empty.")
-            if downloaded.size > self.settings.max_file_size:
-                raise FileTooLarge(
-                    f"The file is {human_size(downloaded.size)}, above the "
-                    f"{human_size(self.settings.max_file_size)} limit."
-                )
-
-            job.update(
-                file_name=downloaded.path.name,
-                file_size=downloaded.size,
-                extras=downloaded.extras,
-            )
+            job.update(file_name=file_path.name, file_size=file_size, extras=extras)
 
             uploader = get_uploader(job.host, self.settings)
             usable, reason = uploader.available()
@@ -231,10 +244,10 @@ class JobManager:
             job.update(
                 stage="uploading",
                 percent=0.0,
-                detail=f"Uploading {human_size(downloaded.size)} to {uploader.name.title()}…",
+                detail=f"Uploading {human_size(file_size)} to {uploader.name.title()}…",
             )
             result = uploader.upload(
-                downloaded.path,
+                file_path,
                 progress=lambda percent, detail: job.update(
                     stage="uploading", percent=percent, detail=detail
                 ),
@@ -243,8 +256,12 @@ class JobManager:
             job.update(result=result)
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
-            if job.source_kind == "torrent_file" and job.torrent_path:
-                job.torrent_path.unlink(missing_ok=True)
+            if job.local_path and job.source_kind in {"torrent_file", "telegram_file"}:
+                job.local_path.unlink(missing_ok=True)
+                try:
+                    job.local_path.parent.rmdir()
+                except OSError:
+                    pass
 
     def _purge_old(self) -> None:
         cutoff = time.time() - 6 * 60 * 60
@@ -264,7 +281,7 @@ def new_job(
     source: str,
     host: str,
     source_kind: str = "url",
-    torrent_path: Optional[Path] = None,
+    local_path: Optional[Path] = None,
 ) -> Job:
     return Job(
         id=secrets.token_hex(4),
@@ -273,5 +290,5 @@ def new_job(
         source=source,
         host=host,
         source_kind=source_kind,
-        torrent_path=torrent_path,
+        local_path=local_path,
     )

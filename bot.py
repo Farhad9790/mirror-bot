@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import mimetypes
 import secrets
+import shutil
 import signal
 import time
 from pathlib import Path
@@ -43,6 +45,9 @@ from mirror.utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Telegram Bot API only serves files up to 20 MB to cloud bots.
+TELEGRAM_FILE_LIMIT = 20 * 1024 * 1024
 
 # --------------------------------------------------------------------------- UI
 def _authorized(update: Update, settings: Settings) -> bool:
@@ -124,18 +129,130 @@ def render_final(job: Job) -> str:
 
 
 # ---------------------------------------------------------------------- helpers
+def _discard_upload(path: Optional[Path]) -> None:
+    if not path:
+        return
+    path.unlink(missing_ok=True)
+    try:
+        path.parent.rmdir()
+    except OSError:
+        pass
+
+
+def _attachment_filename(message: Message, attachment) -> str:
+    """Pick a stable, safe filename for a file sent in Telegram."""
+    name = getattr(attachment, "file_name", None)
+    if name:
+        return sanitize_filename(name, "file.bin")
+
+    mime_type = (getattr(attachment, "mime_type", None) or "").split(";")[0].strip().lower()
+    extension = mimetypes.guess_extension(mime_type) if mime_type else None
+    if extension == ".jpe":
+        extension = ".jpg"
+
+    unique = getattr(attachment, "file_unique_id", None) or secrets.token_hex(4)
+    if message.photo:
+        prefix, extension = "photo", extension or ".jpg"
+    elif message.video:
+        prefix, extension = "video", extension or ".mp4"
+    elif message.audio:
+        prefix, extension = "audio", extension or ".mp3"
+    elif message.voice:
+        # Telegram voice notes are always OGG/Opus, even though mimetypes may
+        # suggest the equivalent ".oga" extension.
+        prefix, extension = "voice", ".ogg"
+    elif message.video_note:
+        prefix, extension = "video_note", extension or ".mp4"
+    elif message.animation:
+        prefix, extension = "animation", extension or ".mp4"
+    elif message.sticker:
+        prefix = "sticker"
+        if message.sticker.is_animated:
+            extension = ".tgs"
+        elif message.sticker.is_video:
+            extension = ".webm"
+        else:
+            extension = extension or ".webp"
+    else:
+        prefix, extension = "file", extension or ".bin"
+
+    return sanitize_filename(f"{prefix}_{unique}{extension}", f"{prefix}{extension or '.bin'}")
+
+
+def _message_attachment(message: Message):
+    """Return the file-like attachment of a Telegram message, if any."""
+    if message.photo:
+        return max(
+            message.photo,
+            key=lambda photo: photo.file_size or (photo.width * photo.height),
+        )
+    for attribute in (
+        "document",
+        "video",
+        "audio",
+        "voice",
+        "video_note",
+        "animation",
+        "sticker",
+    ):
+        attachment = getattr(message, attribute, None)
+        if attachment:
+            return attachment
+    return None
+
+
+async def _save_telegram_file(
+    message: Message,
+    attachment,
+    filename: str,
+    status: Message,
+    settings: Settings,
+) -> Optional[Path]:
+    uploads = (settings.download_dir / "uploads").resolve()
+    uploads.mkdir(parents=True, exist_ok=True)
+    folder = uploads / secrets.token_hex(8)
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / filename
+
+    try:
+        telegram_file = await attachment.get_file()
+        await telegram_file.download_to_drive(custom_path=str(path))
+    except (TelegramError, OSError) as exc:
+        _discard_upload(path)
+        error = f"Could not download that file: {html.escape(str(exc))}"
+        try:
+            await status.edit_text(error, parse_mode=ParseMode.HTML)
+        except TelegramError:
+            await message.reply_text(error, parse_mode=ParseMode.HTML)
+        return None
+
+    if not path.exists() or path.stat().st_size == 0:
+        _discard_upload(path)
+        error = "The file Telegram sent was empty."
+        try:
+            await status.edit_text(error)
+        except TelegramError:
+            await message.reply_text(error)
+        return None
+
+    return path
+
+
 async def _start_job(
     context: ContextTypes.DEFAULT_TYPE,
     job: Job,
     message: Optional[Message],
 ) -> None:
     if not context.application.bot_data.get("accepting_jobs", True):
-        if job.torrent_path:
-            job.torrent_path.unlink(missing_ok=True)
-        await context.bot.send_message(
-            job.chat_id,
-            "The bot is finishing its current run. Send the link again in a few minutes.",
-        )
+        _discard_upload(job.local_path)
+        text = "The bot is finishing its current run. Send the file again in a few minutes."
+        if message is not None:
+            try:
+                await message.edit_text(text)
+                return
+            except TelegramError:
+                pass
+        await context.bot.send_message(job.chat_id, text)
         return
 
     manager: JobManager = context.application.bot_data["manager"]
@@ -228,24 +345,29 @@ async def _submit_job(
     *,
     source: str,
     source_kind: str = "url",
-    torrent_path: Optional[Path] = None,
+    local_path: Optional[Path] = None,
+    status_message: Optional[Message] = None,
 ) -> None:
     settings: Settings = context.application.bot_data["settings"]
+    message = update.effective_message
+
+    async def reject(text: str) -> None:
+        _discard_upload(local_path)
+        if status_message is not None:
+            try:
+                await status_message.edit_text(text, parse_mode=ParseMode.HTML)
+                return
+            except TelegramError:
+                pass
+        await message.reply_text(text, parse_mode=ParseMode.HTML)
+
     if not context.application.bot_data.get("accepting_jobs", True):
-        if torrent_path:
-            torrent_path.unlink(missing_ok=True)
-        await update.effective_message.reply_text(
-            "The bot is finishing its current run. Send the link again in a few minutes."
-        )
+        await reject("The bot is finishing its current run. Send the file again in a few minutes.")
         return
 
     usable, reason = get_uploader("gofile", settings).available()
     if not usable:
-        if torrent_path:
-            torrent_path.unlink(missing_ok=True)
-        await update.effective_message.reply_text(
-            f"⚠️ {html.escape(reason)}", parse_mode=ParseMode.HTML
-        )
+        await reject(f"⚠️ {html.escape(reason)}")
         return
 
     job = new_job(
@@ -254,9 +376,9 @@ async def _submit_job(
         source=source,
         host="gofile",
         source_kind=source_kind,
-        torrent_path=torrent_path,
+        local_path=local_path,
     )
-    await _start_job(context, job, None)
+    await _start_job(context, job, status_message)
 
 
 # -------------------------------------------------------------------- commands
@@ -267,8 +389,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await update.effective_message.reply_text(
         "<b>Mirror bot</b>\n\n"
-        "Send me a link, a magnet link, or a <code>.torrent</code> file. "
+        "Send me a link, a magnet link, a <code>.torrent</code> file, or any file. "
         "I download it and upload it to Gofile, then reply with the public link.\n\n"
+        "Files sent directly in Telegram are uploaded too. Telegram bots can "
+        "download attachments up to 20 MB; send a link for anything larger.\n\n"
         "Any file type, Gofile share links, pages with a download button, and "
         "video sites are supported.\n\n"
         "<b>Commands</b>\n"
@@ -378,7 +502,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     source = extract_url(message.text)
     if not source:
         if _authorized(update, settings):
-            await message.reply_text("Send me a link, a magnet link, or a .torrent file.")
+            await message.reply_text(
+                "Send me a link, a magnet link, a .torrent file, or any file."
+            )
         return
     if not _authorized(update, settings):
         await _deny(update, settings)
@@ -386,44 +512,81 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _submit_job(update, context, source=source)
 
 
-async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def on_attachment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.application.bot_data["settings"]
     message = update.effective_message
-    document = message.document if message else None
-    if not document:
+    if message is None:
         return
-
-    name = document.file_name or "file.torrent"
-    is_torrent = name.lower().endswith(".torrent") or document.mime_type in {
-        "application/x-bittorrent",
-        "application/x-bittorrent; charset=utf-8",
-    }
-    if not is_torrent:
+    attachment = _message_attachment(message)
+    if attachment is None:
         return
     if not _authorized(update, settings):
         await _deny(update, settings)
         return
-    if document.file_size and document.file_size > 20 * 1024 * 1024:
-        await message.reply_text("Telegram only lets bots download files up to 20 MB.")
+
+    document = message.document
+    if document:
+        name = document.file_name or "file.torrent"
+        is_torrent = name.lower().endswith(".torrent") or document.mime_type in {
+            "application/x-bittorrent",
+            "application/x-bittorrent; charset=utf-8",
+        }
+        if is_torrent:
+            if document.file_size and document.file_size > TELEGRAM_FILE_LIMIT:
+                await message.reply_text(
+                    "Telegram only lets bots download files up to 20 MB. "
+                    "Send a direct link to a larger .torrent file instead."
+                )
+                return
+            filename = sanitize_filename(name, "file.torrent")
+            status = await message.reply_text(
+                f"Downloading <code>{html.escape(filename)}</code> from Telegram…",
+                parse_mode=ParseMode.HTML,
+            )
+            path = await _save_telegram_file(
+                message, document, filename, status, settings
+            )
+            if path is None:
+                return
+            await _submit_job(
+                update,
+                context,
+                source=filename,
+                source_kind="torrent_file",
+                local_path=path,
+                status_message=status,
+            )
+            return
+
+    size = getattr(attachment, "file_size", None)
+    if size and size > TELEGRAM_FILE_LIMIT:
+        await message.reply_text(
+            "Telegram only lets bots download files up to 20 MB. "
+            "Send a direct link to a larger file instead."
+        )
+        return
+    if size and size > settings.max_file_size:
+        await message.reply_text(
+            f"That file is {human_size(size)}, above the "
+            f"{human_size(settings.max_file_size)} limit."
+        )
         return
 
-    uploads = (settings.download_dir / "uploads").resolve()
-    uploads.mkdir(parents=True, exist_ok=True)
-    path = uploads / f"{secrets.token_hex(8)}.torrent"
-    try:
-        telegram_file = await document.get_file()
-        await telegram_file.download_to_drive(custom_path=str(path))
-    except TelegramError as exc:
-        path.unlink(missing_ok=True)
-        await message.reply_text(f"Could not download that .torrent file: {exc}")
+    filename = _attachment_filename(message, attachment)
+    status = await message.reply_text(
+        f"Downloading <code>{html.escape(filename)}</code> from Telegram…",
+        parse_mode=ParseMode.HTML,
+    )
+    path = await _save_telegram_file(message, attachment, filename, status, settings)
+    if path is None:
         return
-
     await _submit_job(
         update,
         context,
-        source=sanitize_filename(name, "file.torrent"),
-        source_kind="torrent_file",
-        torrent_path=path,
+        source=filename,
+        source_kind="telegram_file",
+        local_path=path,
+        status_message=status,
     )
 
 
@@ -504,7 +667,7 @@ def _register(app: Application, settings: Settings, manager: JobManager) -> None
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
     app.add_handler(CommandHandler("id", cmd_id))
-    app.add_handler(MessageHandler(filters.Document.ALL, on_document))
+    app.add_handler(MessageHandler(filters.ATTACHMENT, on_attachment))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_error_handler(on_error)
@@ -525,14 +688,18 @@ async def run_bot(settings: Settings) -> None:
     if not settings.allowed_user_ids:
         logger.warning("ALLOWED_USER_IDS is empty: anyone who finds the bot can use it.")
 
-    # Remove .torrent files left behind by a previous interrupted run.
+    # Remove files left behind by a previous interrupted run.
     uploads = settings.download_dir / "uploads"
     if uploads.exists():
         cutoff = time.time() - 24 * 60 * 60
-        for old_file in uploads.glob("*.torrent"):
+        for old_path in uploads.iterdir():
             try:
-                if old_file.stat().st_mtime < cutoff:
-                    old_file.unlink(missing_ok=True)
+                if old_path.stat().st_mtime >= cutoff:
+                    continue
+                if old_path.is_dir():
+                    shutil.rmtree(old_path, ignore_errors=True)
+                else:
+                    old_path.unlink(missing_ok=True)
             except OSError:
                 pass
 
