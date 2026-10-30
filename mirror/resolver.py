@@ -302,6 +302,10 @@ class Resolver:
             return self._resolve_gofile_inner(code)
         except NoFallbackResolutionError:
             raise
+        except _GofileAuthError as exc:
+            raise NoFallbackResolutionError(
+                "Gofile rejected the guest token. Try the link again in a few minutes."
+            ) from exc
         except ResolutionError as exc:
             # Gofile failures are definitive; yt-dlp cannot read these links.
             raise NoFallbackResolutionError(str(exc)) from exc
