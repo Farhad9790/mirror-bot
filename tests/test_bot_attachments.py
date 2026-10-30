@@ -18,6 +18,8 @@ def fake_message(**overrides):
         "animation": None,
         "sticker": None,
         "document": None,
+        "text": None,
+        "caption": None,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -113,13 +115,39 @@ def make_update(document: FakeDocument):
     )
 
 
-def make_context(tmp_path):
+class FakeCommandMessage:
+    def __init__(self, replied_to=None):
+        self.reply_to_message = replied_to
+        self.text = "/gf"
+        self.replies: list[str] = []
+        self.statuses: list[FakeStatus] = []
+
+    async def reply_text(self, text, **kwargs):
+        self.replies.append(text)
+        status = FakeStatus()
+        self.statuses.append(status)
+        return status
+
+
+def make_context(tmp_path, args=None):
     settings = Settings(
         telegram_token="token",
         allowed_user_ids=frozenset({1}),
         download_dir=tmp_path,
     )
-    return SimpleNamespace(application=SimpleNamespace(bot_data={"settings": settings}))
+    return SimpleNamespace(
+        application=SimpleNamespace(bot_data={"settings": settings}),
+        args=list(args or []),
+    )
+
+
+def make_command_update(command_message: FakeCommandMessage):
+    return SimpleNamespace(
+        effective_user=SimpleNamespace(id=1),
+        effective_chat=SimpleNamespace(id=2),
+        effective_message=command_message,
+        callback_query=None,
+    )
 
 
 def test_attachment_is_saved_and_submitted_as_telegram_file(tmp_path, monkeypatch):
@@ -173,3 +201,50 @@ def test_large_telegram_attachment_is_rejected(tmp_path, monkeypatch):
 
     assert not submitted
     assert "20 MB" in update.effective_message.replies[0]
+
+
+def test_gf_reply_to_file_submits_telegram_file(tmp_path, monkeypatch):
+    replied = FakeAttachmentMessage(FakeDocument("hello.txt", b"hello"))
+    command = FakeCommandMessage(replied)
+    update = make_command_update(command)
+    context = make_context(tmp_path)
+    submitted = {}
+
+    async def fake_submit(update, context, **kwargs):
+        submitted.update(kwargs)
+
+    monkeypatch.setattr(bot, "_submit_job", fake_submit)
+    asyncio.run(bot._cmd_link(update, context, command="gf"))
+
+    assert submitted["source"] == "hello.txt"
+    assert submitted["source_kind"] == "telegram_file"
+    assert submitted["local_path"].read_bytes() == b"hello"
+    assert submitted["status_message"] is command.statuses[0]
+
+
+def test_mirror_reply_to_text_link_submits_link(tmp_path, monkeypatch):
+    replied = fake_message(text="https://example.com/file.zip")
+    command = FakeCommandMessage(replied)
+    update = make_command_update(command)
+    context = make_context(tmp_path)
+    submitted = {}
+
+    async def fake_submit(update, context, **kwargs):
+        submitted.update(kwargs)
+
+    monkeypatch.setattr(bot, "_submit_job", fake_submit)
+    asyncio.run(bot._cmd_link(update, context, command="mirror"))
+
+    assert submitted["source"] == "https://example.com/file.zip"
+    assert "source_kind" not in submitted
+
+
+def test_gf_reply_to_unsupported_message_shows_usage(tmp_path, monkeypatch):
+    command = FakeCommandMessage(fake_message(text="hello"))
+    update = make_command_update(command)
+    context = make_context(tmp_path)
+
+    asyncio.run(bot._cmd_link(update, context, command="gf"))
+
+    assert "Usage" in command.replies[0]
+    assert "reply to a file" in command.replies[0]

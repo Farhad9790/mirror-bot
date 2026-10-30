@@ -154,13 +154,13 @@ The image includes aria2 and ffmpeg. Downloads and state live in `/data`.
 | Command | Description |
 |---|---|
 | `/start`, `/help` | Usage |
-| `/gf <link>` | Upload to Gofile |
+| `/gf <link>` | Upload a link, or reply to a file with `/gf` |
 | `/mirror <link>` | Same as `/gf` |
 | `/status` | Active jobs |
 | `/cancel` | Cancel your active jobs |
 | `/id` | Show your Telegram user/chat ID |
 
-You can also send a link, a magnet link, a `.torrent` file, or any file directly. Files sent in Telegram are uploaded to Gofile; cloud bots can download attachments up to 20 MB.
+You can also send a link, a magnet link, a `.torrent` file, or any file directly. Files sent in Telegram are uploaded to Gofile; cloud bots can download attachments up to 20 MB. To mirror a file you already sent, reply to it with `/gf` or `/mirror`.
 
 ## Supported links
 

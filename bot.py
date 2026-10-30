@@ -392,11 +392,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Send me a link, a magnet link, a <code>.torrent</code> file, or any file. "
         "I download it and upload it to Gofile, then reply with the public link.\n\n"
         "Files sent directly in Telegram are uploaded too. Telegram bots can "
-        "download attachments up to 20 MB; send a link for anything larger.\n\n"
+        "download attachments up to 20 MB; send a link for anything larger. "
+        "You can also reply to a file with /gf.\n\n"
         "Any file type, Gofile share links, pages with a download button, and "
         "video sites are supported.\n\n"
         "<b>Commands</b>\n"
-        "/gf &lt;link&gt; — upload to Gofile\n"
+        "/gf &lt;link&gt; — upload a link, or reply to a file with /gf\n"
         "/mirror &lt;link&gt; — same as /gf\n"
         "/status — active jobs\n"
         "/cancel — cancel your jobs\n"
@@ -439,9 +440,19 @@ async def _cmd_link(
             source = found
             break
 
+    replied = getattr(update.effective_message, "reply_to_message", None)
+    if not source and replied is not None:
+        attachment = _message_attachment(replied)
+        if attachment is not None:
+            await _mirror_attachment(update, context, replied, attachment)
+            return
+        if replied.text:
+            source = extract_url(replied.text)
+
     if not source:
         await update.effective_message.reply_text(
-            f"Usage: <code>/{command} &lt;link&gt;</code>",
+            f"Usage: <code>/{command} &lt;link&gt;</code>\n"
+            f"Or reply to a file or link with <code>/{command}</code>.",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -512,19 +523,19 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _submit_job(update, context, source=source)
 
 
-async def on_attachment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _mirror_attachment(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    attachment_message: Message,
+    attachment,
+) -> None:
+    """Download a Telegram attachment and submit it as a Gofile job."""
     settings: Settings = context.application.bot_data["settings"]
     message = update.effective_message
     if message is None:
         return
-    attachment = _message_attachment(message)
-    if attachment is None:
-        return
-    if not _authorized(update, settings):
-        await _deny(update, settings)
-        return
 
-    document = message.document
+    document = attachment_message.document
     if document:
         name = document.file_name or "file.torrent"
         is_torrent = name.lower().endswith(".torrent") or document.mime_type in {
@@ -572,7 +583,7 @@ async def on_attachment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
-    filename = _attachment_filename(message, attachment)
+    filename = _attachment_filename(attachment_message, attachment)
     status = await message.reply_text(
         f"Downloading <code>{html.escape(filename)}</code> from Telegram…",
         parse_mode=ParseMode.HTML,
@@ -588,6 +599,20 @@ async def on_attachment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         local_path=path,
         status_message=status,
     )
+
+
+async def on_attachment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings: Settings = context.application.bot_data["settings"]
+    message = update.effective_message
+    if message is None:
+        return
+    attachment = _message_attachment(message)
+    if attachment is None:
+        return
+    if not _authorized(update, settings):
+        await _deny(update, settings)
+        return
+    await _mirror_attachment(update, context, message, attachment)
 
 
 # ---------------------------------------------------------------------- buttons
