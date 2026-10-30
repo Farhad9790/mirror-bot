@@ -6,15 +6,31 @@ from ..config import Settings
 from .base import Uploader, UploadResult
 from .gofile import GofileUploader
 from .pixeldrain import PixeldrainUploader
+from .telegram import TelegramUploader
 
-HOST_LABELS = {"gofile": "Gofile", "pixeldrain": "Pixeldrain"}
+HOST_LABELS = {
+    "gofile": "Gofile",
+    "pixeldrain": "Pixeldrain",
+    "telegram": "Telegram chat",
+}
 
 
-def get_uploader(name: str, settings: Settings) -> Uploader:
+def get_uploader(
+    name: str,
+    settings: Settings,
+    chat_id: int | None = None,
+) -> Uploader:
     if name == "gofile":
         return GofileUploader(settings.gofile_token)
     if name == "pixeldrain":
         return PixeldrainUploader(settings.pixeldrain_api_key)
+    if name == "telegram":
+        return TelegramUploader(
+            settings.telegram_token,
+            chat_id,
+            max_upload=settings.telegram_upload_limit,
+            part_size=settings.telegram_part_size,
+        )
     raise ValueError(f"Unknown upload host: {name}")
 
 

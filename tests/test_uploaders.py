@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import pytest
 
+from mirror.config import Settings
 from mirror.errors import UploadError, UploaderUnavailable
+from mirror.uploaders import host_status
 from mirror.uploaders.gofile import GofileUploader
 from mirror.uploaders.pixeldrain import PixeldrainUploader
 from mirror.utils import CancelToken
@@ -49,6 +51,12 @@ class FakeSession:
         self.last_auth = auth
         self._consume(data)
         return self.response
+
+
+def test_host_status_includes_telegram():
+    status = host_status(Settings(telegram_token="x"))
+    assert status["gofile"] == (True, "")
+    assert status["telegram"] == (True, "")
 
 
 def test_gofile_guest_upload(tmp_path):

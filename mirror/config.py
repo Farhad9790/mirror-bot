@@ -55,6 +55,8 @@ class Settings:
     state_file: Path = Path(".state/telegram.json")
     gofile_token: str | None = None
     pixeldrain_api_key: str | None = None
+    telegram_upload_limit: int = 45 * 1024**2
+    telegram_part_size: int = 45 * 1024**2
     cookies_file: Path | None = None
     multi_file_mode: str = "largest"
     ytdlp_format: str = "bv*+ba/b"
@@ -95,6 +97,12 @@ def load_settings() -> Settings:
         state_file=state_file,
         gofile_token=os.getenv("GOFILE_TOKEN", "").strip() or None,
         pixeldrain_api_key=os.getenv("PIXELDRAIN_API_KEY", "").strip() or None,
+        telegram_upload_limit=parse_size(
+            os.getenv("TELEGRAM_UPLOAD_LIMIT"), 45 * 1024**2
+        ),
+        telegram_part_size=parse_size(
+            os.getenv("TELEGRAM_PART_SIZE"), 45 * 1024**2
+        ),
         cookies_file=Path(cookies).expanduser() if cookies else None,
         multi_file_mode=multi_file_mode,
         ytdlp_format=os.getenv("YTDLP_FORMAT", "bv*+ba/b").strip() or "bv*+ba/b",

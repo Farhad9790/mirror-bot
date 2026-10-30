@@ -217,7 +217,7 @@ class JobManager:
                 extras=downloaded.extras,
             )
 
-            uploader = get_uploader(job.host, self.settings)
+            uploader = get_uploader(job.host, self.settings, chat_id=job.chat_id)
             usable, reason = uploader.available()
             if not usable:
                 raise UploaderUnavailable(reason)

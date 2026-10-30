@@ -88,12 +88,15 @@ def _cancel_keyboard(job_id: str) -> InlineKeyboardMarkup:
 
 def _host_keyboard(settings: Settings, token: str) -> InlineKeyboardMarkup:
     status = host_status(settings)
-    buttons = []
-    for name, label in HOST_LABELS.items():
-        usable, _ = status[name]
-        text = label if usable else f"{label} (no API key)"
-        buttons.append(InlineKeyboardButton(text, callback_data=f"pick:{token}:{name}"))
-    return InlineKeyboardMarkup([buttons])
+    buttons = [
+        InlineKeyboardButton(label, callback_data=f"pick:{token}:{name}")
+        for name, label in HOST_LABELS.items()
+        if status[name][0]
+    ]
+    if not buttons:
+        buttons = [InlineKeyboardButton("Gofile", callback_data=f"pick:{token}:gofile")]
+    rows = [buttons[index : index + 2] for index in range(0, len(buttons), 2)]
+    return InlineKeyboardMarkup(rows)
 
 
 def render_job(job: Job) -> str:
@@ -133,8 +136,13 @@ def render_final(job: Job) -> str:
         ]
         if snap["extras"]:
             lines.append(f"<i>{snap['extras']} extra file(s) were skipped.</i>")
-        url = html.escape(result.url, quote=True)
-        lines.append(f'<b>Link:</b> <a href="{url}">{url}</a>')
+        if snap["host"] == "telegram":
+            lines.append("<b>Sent to:</b> this chat")
+            if result.detail:
+                lines.append(html.escape(result.detail))
+        else:
+            url = html.escape(result.url, quote=True)
+            lines.append(f'<b>Link:</b> <a href="{url}">{url}</a>')
         return "\n".join(lines)
 
     if snap["status"] == "cancelled":
@@ -308,10 +316,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(
         "<b>Mirror bot</b>\n\n"
         "Send me a link, a magnet link, or a <code>.torrent</code> file. "
-        "I download it and upload it to Gofile or Pixeldrain.\n\n"
+        "I download it and upload it to Gofile, Pixeldrain, or send it straight "
+        "to this chat.\n\n"
+        "Files above Telegram's 45 MB bot upload limit are split into numbered "
+        "parts automatically.\n\n"
         "Direct files, pages with a download button, and video sites are supported.\n\n"
         "<b>Commands</b>\n"
-        "/mirror &lt;link&gt; [gofile|pixeldrain] — skip the host picker\n"
+        "/mirror &lt;link&gt; [gofile|pixeldrain|telegram] — skip the host picker\n"
         "/status — active jobs\n"
         "/cancel — cancel your jobs\n"
         "/hosts — upload destinations\n"
@@ -361,16 +372,23 @@ async def cmd_mirror(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     args = context.args or []
     source = None
     host = settings.default_host
+    aliases = {
+        "gofile": "gofile",
+        "pixeldrain": "pixeldrain",
+        "telegram": "telegram",
+        "tg": "telegram",
+        "chat": "telegram",
+    }
     for arg in args:
         found = extract_url(arg)
         if found and source is None:
             source = found
-        elif arg.lower() in HOST_LABELS:
-            host = arg.lower()
+        elif arg.lower() in aliases:
+            host = aliases[arg.lower()]
 
     if not source:
         await update.effective_message.reply_text(
-            "Usage: <code>/mirror &lt;link&gt; [gofile|pixeldrain]</code>\n"
+            "Usage: <code>/mirror &lt;link&gt; [gofile|pixeldrain|telegram]</code>\n"
             "Or just send a link and pick a host.",
             parse_mode=ParseMode.HTML,
         )

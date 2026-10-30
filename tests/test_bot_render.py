@@ -32,6 +32,22 @@ def test_render_done_job():
     assert "1.2 KB" in text
 
 
+def test_render_telegram_done_job():
+    job = new_job(user_id=1, chat_id=2, source="https://example.com/a.zip", host="telegram")
+    job.update(
+        status="done",
+        stage="done",
+        percent=100.0,
+        file_name="a.zip",
+        file_size=1234,
+        result=UploadResult(url="", host="Telegram", detail="Sent as 2 parts."),
+    )
+    text = render_final(job)
+    assert "Sent to" in text
+    assert "2 parts" in text
+    assert "http" not in text
+
+
 def test_render_failed_job_escapes_html():
     job = new_job(user_id=1, chat_id=2, source="https://example.com/a.zip", host="gofile")
     job.update(status="failed", stage="failed", error="bad <script> & stuff")

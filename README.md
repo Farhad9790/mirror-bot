@@ -1,6 +1,6 @@
 # Telegram Mirror Bot
 
-A Telegram bot that takes a link, downloads the file, and re-uploads it to **Gofile** or **Pixeldrain**.
+A Telegram bot that takes a link, downloads the file, and re-uploads it to **Gofile**, **Pixeldrain**, or sends it **directly to the Telegram chat**.
 
 It handles direct file links, web pages where the file is hidden behind a "Download" button, video sites supported by yt-dlp, magnet links, and `.torrent` files.
 
@@ -14,10 +14,11 @@ Telegram link / .torrent
    aria2c (HTTP / torrent)  or  yt-dlp (video sites)
           │
           ▼
-   Gofile guest/account upload  or  Pixeldrain API upload
+   Gofile guest/account upload, Pixeldrain API upload,
+   or Telegram chat (auto-split into 45 MB parts)
           │
           ▼
-   Public link sent back in Telegram
+   Public link or files sent back in Telegram
 ```
 
 ## Features
@@ -29,6 +30,7 @@ Telegram link / .torrent
 - Magnet links and `.torrent` files through aria2c (DHT enabled, seeding disabled).
 - Gofile guest uploads work with no account. An optional `GOFILE_TOKEN` uses your account.
 - Pixeldrain uploads with an API key (Pixeldrain no longer allows anonymous uploads).
+- **Telegram chat delivery:** files up to 45 MB are sent as a document; larger files are split into numbered 45 MB parts, sent one at a time, with rejoin instructions in the first caption.
 - Progress bars, cancel buttons, per-user job limits, size limits and timeouts.
 - Private mode with `ALLOWED_USER_IDS`.
 - Runs on GitHub Actions, Docker, or any small VPS.
@@ -67,7 +69,7 @@ Telegram link / .torrent
 
 5. **Enable Actions and run it.** Open the **Actions** tab → **Telegram Mirror Bot** → **Run workflow**. Wait for the job to start, then send your bot a link.
 
-6. **Choose Gofile or Pixeldrain** with the inline buttons. The bot downloads, uploads, and replies with the public link.
+6. **Choose Gofile, Pixeldrain, or Telegram chat** with the inline buttons. The bot downloads and either replies with a public link or sends the file(s) directly to the chat.
 
 ### GitHub Actions limitations
 
@@ -143,6 +145,8 @@ The image includes aria2 and ffmpeg. Downloads and state live in `/data`.
 | `JOB_TIMEOUT` | `7200` | Per-job timeout in seconds |
 | `BOT_RUN_SECONDS` | `0` | Stop after N seconds; `0` = run until stopped |
 | `MULTI_FILE_MODE` | `largest` | For torrents/multi-file downloads: upload the largest file, or `zip` everything |
+| `TELEGRAM_UPLOAD_LIMIT` | `45M` | Files up to this size are sent whole to Telegram |
+| `TELEGRAM_PART_SIZE` | `45M` | Part size used when a Telegram file is split (keep below the 50 MB Bot API limit) |
 | `YTDLP_FORMAT` | `bv*+ba/b` | yt-dlp format selector |
 | `COOKIES_FILE` | empty | Optional Netscape cookies file for restricted video sites |
 | `DOWNLOAD_DIR` | `downloads` | Temporary download directory |
@@ -156,7 +160,7 @@ The image includes aria2 and ffmpeg. Downloads and state live in `/data`.
 | Command | Description |
 |---|---|
 | `/start`, `/help` | Usage |
-| `/mirror <link> [gofile\|pixeldrain]` | Skip the host picker |
+| `/mirror <link> [gofile\|pixeldrain\|telegram]` | Skip the host picker (`tg` and `chat` also work) |
 | `/status` | Active jobs |
 | `/cancel` | Cancel your active jobs |
 | `/hosts` | Show configured upload destinations |
@@ -198,6 +202,16 @@ The resolver is intentionally best-effort. Sites that build download links in Ja
 
 **Torrents do not connect** — many datacenter networks block BitTorrent. Try a VPS, or use a direct link.
 
+**Telegram says the file is too big** — the cloud Bot API allows bots to upload up to 50 MB. Keep `TELEGRAM_UPLOAD_LIMIT` and `TELEGRAM_PART_SIZE` at `45M` or lower.
+
+**How do I rejoin Telegram split parts?** — download every part, then:
+- Windows: `copy /b "movie.mkv.part*" "movie.mkv"`
+- Linux/macOS: `cat movie.mkv.part* > movie.mkv`
+
+The parts are byte-for-byte pieces of the original file, not a compressed archive. All parts are required.
+
+**Telegram split sending is slow or rate-limited** — many parts take time and can hit Telegram flood limits. The bot retries automatically. For very large files, Gofile is usually faster than Telegram.
+
 **The Actions run stops after 4h45m** — that is expected. The next scheduled run starts within about 15 minutes plus GitHub's cron delay.
 
 **The state push fails** — the repository's default branch is probably protected. Allow GitHub Actions to push, or replace the state step with `actions/cache` restore/save.
@@ -219,7 +233,7 @@ pip install -r requirements.txt -r requirements-dev.txt
 pytest -q
 ```
 
-The tests cover URL/filename handling, the HTML download-button resolver, both uploaders with mocked HTTP responses, and the downloader's file collection logic.
+The tests cover URL/filename handling, the HTML download-button resolver, all three uploaders with mocked HTTP responses, the Telegram splitter, and the downloader's file collection logic.
 
 ## Project layout
 
@@ -234,6 +248,7 @@ mirror/
   uploaders/
     gofile.py              Gofile upload fleet API
     pixeldrain.py          Pixeldrain API
+    telegram.py            Direct chat delivery with automatic splitting
 .github/workflows/
   bot.yml                  Scheduled bot run on GitHub Actions
   tests.yml                Unit tests
