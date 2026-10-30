@@ -5,6 +5,11 @@ on:
     # Fallback if the automatic hand-off fails. Runs normally queue themselves.
     - cron: "0 */5 * * *"
   workflow_dispatch:
+    inputs:
+      run_seconds:
+        description: "Run for N seconds (blank = 17100)"
+        required: false
+        default: ""
 
 concurrency:
   group: telegram-mirror-bot
@@ -30,7 +35,7 @@ jobs:
       MULTI_FILE_MODE: ${{ vars.MULTI_FILE_MODE || 'largest' }}
       JOB_TIMEOUT: ${{ vars.JOB_TIMEOUT || '7200' }}
       YTDLP_FORMAT: ${{ vars.YTDLP_FORMAT || 'bv*+ba/b' }}
-      BOT_RUN_SECONDS: "17100"
+      BOT_RUN_SECONDS: ${{ github.event.inputs.run_seconds || '17100' }}
       STATE_FILE: .state/telegram.json
       LOG_LEVEL: INFO
 
