@@ -37,7 +37,7 @@ class FakeContext:
         self.args = args
 
 
-def run_direct(monkeypatch, host: str, command: str, args: list[str]):
+def run_command(monkeypatch, command: str, args: list[str]):
     settings = Settings(telegram_token="token", allowed_user_ids=frozenset({1}))
     update = FakeUpdate()
     context = FakeContext(settings, args)
@@ -47,31 +47,29 @@ def run_direct(monkeypatch, host: str, command: str, args: list[str]):
         started.append(job)
 
     monkeypatch.setattr(bot, "_start_job", fake_start)
-    asyncio.run(bot._mirror_direct(update, context, host=host, command=command))
+    asyncio.run(bot._cmd_link(update, context, command=command))
     return update, started
 
 
-def test_gf_shortcut_starts_gofile_job(monkeypatch):
-    update, started = run_direct(
-        monkeypatch, "gofile", "gf", ["https://example.com/file.zip"]
-    )
+def test_gf_starts_gofile_job(monkeypatch):
+    update, started = run_command(monkeypatch, "gf", ["https://example.com/file.zip"])
     assert len(started) == 1
     assert started[0].host == "gofile"
     assert started[0].source == "https://example.com/file.zip"
     assert not update.effective_message.replies
 
 
-def test_l_shortcut_starts_telegram_job(monkeypatch):
-    update, started = run_direct(
-        monkeypatch, "telegram", "l", ["https://example.com/file.zip"]
+def test_mirror_starts_gofile_job(monkeypatch):
+    update, started = run_command(
+        monkeypatch, "mirror", ["https://example.com/file.zip"]
     )
     assert len(started) == 1
-    assert started[0].host == "telegram"
+    assert started[0].host == "gofile"
     assert not update.effective_message.replies
 
 
-def test_shortcut_without_link_shows_usage(monkeypatch):
-    update, started = run_direct(monkeypatch, "gofile", "gf", [])
+def test_command_without_link_shows_usage(monkeypatch):
+    update, started = run_command(monkeypatch, "gf", [])
     assert not started
     assert update.effective_message.replies
     assert "/gf" in update.effective_message.replies[0]

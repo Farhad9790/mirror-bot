@@ -17,35 +17,19 @@ def test_render_running_job():
 
 
 def test_render_done_job():
-    job = new_job(user_id=1, chat_id=2, source="https://example.com/a.zip", host="pixeldrain")
+    job = new_job(user_id=1, chat_id=2, source="https://example.com/a.zip", host="gofile")
     job.update(
         status="done",
         stage="done",
         percent=100.0,
         file_name="a.zip",
         file_size=1234,
-        result=UploadResult(url="https://pixeldrain.com/u/abc", host="Pixeldrain"),
+        result=UploadResult(url="https://gofile.io/d/abc", host="Gofile"),
     )
     text = render_final(job)
     assert "Mirror complete" in text
-    assert "https://pixeldrain.com/u/abc" in text
+    assert "https://gofile.io/d/abc" in text
     assert "1.2 KB" in text
-
-
-def test_render_telegram_done_job():
-    job = new_job(user_id=1, chat_id=2, source="https://example.com/a.zip", host="telegram")
-    job.update(
-        status="done",
-        stage="done",
-        percent=100.0,
-        file_name="a.zip",
-        file_size=1234,
-        result=UploadResult(url="", host="Telegram", detail="Sent as 2 parts."),
-    )
-    text = render_final(job)
-    assert "Sent to" in text
-    assert "2 parts" in text
-    assert "http" not in text
 
 
 def test_render_failed_job_escapes_html():
@@ -58,5 +42,5 @@ def test_render_failed_job_escapes_html():
 
 def test_settings_defaults():
     settings = Settings(telegram_token="x")
-    assert settings.default_host == "gofile"
     assert settings.max_concurrent_jobs == 2
+    assert settings.gofile_token is None

@@ -23,8 +23,6 @@ jobs:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       ALLOWED_USER_IDS: ${{ secrets.ALLOWED_USER_IDS }}
       GOFILE_TOKEN: ${{ secrets.GOFILE_TOKEN }}
-      PIXELDRAIN_API_KEY: ${{ secrets.PIXELDRAIN_API_KEY }}
-      DEFAULT_HOST: ${{ vars.DEFAULT_HOST || 'gofile' }}
       MAX_FILE_SIZE: ${{ vars.MAX_FILE_SIZE || '8G' }}
       MAX_CONCURRENT_JOBS: ${{ vars.MAX_CONCURRENT_JOBS || '1' }}
       MULTI_FILE_MODE: ${{ vars.MULTI_FILE_MODE || 'largest' }}

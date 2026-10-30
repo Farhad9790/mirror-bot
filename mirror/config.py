@@ -46,7 +46,6 @@ def _env_ids(name: str) -> frozenset[int]:
 class Settings:
     telegram_token: str
     allowed_user_ids: frozenset[int] = field(default_factory=frozenset)
-    default_host: str = "gofile"
     max_file_size: int = 8 * 1024**3
     max_concurrent_jobs: int = 2
     job_timeout: int = 2 * 60 * 60
@@ -54,9 +53,6 @@ class Settings:
     download_dir: Path = Path("downloads")
     state_file: Path = Path(".state/telegram.json")
     gofile_token: str | None = None
-    pixeldrain_api_key: str | None = None
-    telegram_upload_limit: int = 45 * 1024**2
-    telegram_part_size: int = 45 * 1024**2
     cookies_file: Path | None = None
     multi_file_mode: str = "largest"
     ytdlp_format: str = "bv*+ba/b"
@@ -73,10 +69,6 @@ def load_settings() -> Settings:
             "in your environment or .env file."
         )
 
-    default_host = os.getenv("DEFAULT_HOST", "gofile").strip().lower()
-    if default_host not in {"gofile", "pixeldrain"}:
-        default_host = "gofile"
-
     multi_file_mode = os.getenv("MULTI_FILE_MODE", "largest").strip().lower()
     if multi_file_mode not in {"largest", "zip"}:
         multi_file_mode = "largest"
@@ -88,7 +80,6 @@ def load_settings() -> Settings:
     return Settings(
         telegram_token=token,
         allowed_user_ids=_env_ids("ALLOWED_USER_IDS"),
-        default_host=default_host,
         max_file_size=parse_size(os.getenv("MAX_FILE_SIZE"), 8 * 1024**3),
         max_concurrent_jobs=max(1, _env_int("MAX_CONCURRENT_JOBS", 2)),
         job_timeout=max(60, _env_int("JOB_TIMEOUT", 2 * 60 * 60)),
@@ -96,13 +87,6 @@ def load_settings() -> Settings:
         download_dir=download_dir,
         state_file=state_file,
         gofile_token=os.getenv("GOFILE_TOKEN", "").strip() or None,
-        pixeldrain_api_key=os.getenv("PIXELDRAIN_API_KEY", "").strip() or None,
-        telegram_upload_limit=parse_size(
-            os.getenv("TELEGRAM_UPLOAD_LIMIT"), 45 * 1024**2
-        ),
-        telegram_part_size=parse_size(
-            os.getenv("TELEGRAM_PART_SIZE"), 45 * 1024**2
-        ),
         cookies_file=Path(cookies).expanduser() if cookies else None,
         multi_file_mode=multi_file_mode,
         ytdlp_format=os.getenv("YTDLP_FORMAT", "bv*+ba/b").strip() or "bv*+ba/b",

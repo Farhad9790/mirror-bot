@@ -8,7 +8,6 @@ import logging
 import secrets
 import signal
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -35,7 +34,7 @@ from telegram.ext import (
 from mirror.config import Settings, load_settings
 from mirror.jobs import Job, JobManager, new_job
 from mirror.state import load_state, save_state
-from mirror.uploaders import HOST_LABELS, get_uploader, host_status
+from mirror.uploaders import get_uploader
 from mirror.utils import (
     extract_url,
     human_size,
@@ -44,19 +43,6 @@ from mirror.utils import (
 )
 
 logger = logging.getLogger(__name__)
-
-PENDING_TTL = 60 * 60
-
-
-@dataclass
-class Pending:
-    token: str
-    user_id: int
-    source: str
-    source_kind: str
-    torrent_path: Optional[Path]
-    created_at: float
-
 
 # --------------------------------------------------------------------------- UI
 def _authorized(update: Update, settings: Settings) -> bool:
@@ -86,19 +72,6 @@ def _cancel_keyboard(job_id: str) -> InlineKeyboardMarkup:
     )
 
 
-def _host_keyboard(settings: Settings, token: str) -> InlineKeyboardMarkup:
-    status = host_status(settings)
-    buttons = [
-        InlineKeyboardButton(label, callback_data=f"pick:{token}:{name}")
-        for name, label in HOST_LABELS.items()
-        if status[name][0]
-    ]
-    if not buttons:
-        buttons = [InlineKeyboardButton("Gofile", callback_data=f"pick:{token}:gofile")]
-    rows = [buttons[index : index + 2] for index in range(0, len(buttons), 2)]
-    return InlineKeyboardMarkup(rows)
-
-
 def render_job(job: Job) -> str:
     snap = job.snapshot()
     titles = {
@@ -120,7 +93,7 @@ def render_job(job: Job) -> str:
         lines.append(html.escape(str(snap["detail"])))
     if snap["extras"]:
         lines.append(f"<i>{snap['extras']} extra file(s) will be skipped (largest is uploaded).</i>")
-    lines.append(f"<b>Host:</b> {HOST_LABELS.get(snap['host'], snap['host'])}")
+    lines.append(f"<b>Host:</b> {snap['host'].title()}")
     return "\n".join(lines)
 
 
@@ -136,13 +109,8 @@ def render_final(job: Job) -> str:
         ]
         if snap["extras"]:
             lines.append(f"<i>{snap['extras']} extra file(s) were skipped.</i>")
-        if snap["host"] == "telegram":
-            lines.append("<b>Sent to:</b> this chat")
-            if result.detail:
-                lines.append(html.escape(result.detail))
-        else:
-            url = html.escape(result.url, quote=True)
-            lines.append(f'<b>Link:</b> <a href="{url}">{url}</a>')
+        url = html.escape(result.url, quote=True)
+        lines.append(f'<b>Link:</b> <a href="{url}">{url}</a>')
         return "\n".join(lines)
 
     if snap["status"] == "cancelled":
@@ -156,21 +124,6 @@ def render_final(job: Job) -> str:
 
 
 # ---------------------------------------------------------------------- helpers
-def _purge_pending(pending: dict[str, Pending]) -> None:
-    cutoff = time.time() - PENDING_TTL
-    for token, item in list(pending.items()):
-        if item.created_at < cutoff:
-            pending.pop(token, None)
-            if item.torrent_path:
-                item.torrent_path.unlink(missing_ok=True)
-
-
-def _remember_pending(context: ContextTypes.DEFAULT_TYPE, item: Pending) -> None:
-    pending: dict[str, Pending] = context.application.bot_data.setdefault("pending", {})
-    _purge_pending(pending)
-    pending[item.token] = item
-
-
 async def _start_job(
     context: ContextTypes.DEFAULT_TYPE,
     job: Job,
@@ -269,7 +222,7 @@ async def _report_job(
             logger.exception("Could not deliver final status for job %s", job.id)
 
 
-async def _queue_picker(
+async def _submit_job(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
     *,
@@ -285,26 +238,25 @@ async def _queue_picker(
             "The bot is finishing its current run. Send the link again in a few minutes."
         )
         return
-    token = secrets.token_urlsafe(6)
-    _remember_pending(
-        context,
-        Pending(
-            token=token,
-            user_id=update.effective_user.id,
-            source=source,
-            source_kind=source_kind,
-            torrent_path=torrent_path,
-            created_at=time.time(),
-        ),
+
+    usable, reason = get_uploader("gofile", settings).available()
+    if not usable:
+        if torrent_path:
+            torrent_path.unlink(missing_ok=True)
+        await update.effective_message.reply_text(
+            f"⚠️ {html.escape(reason)}", parse_mode=ParseMode.HTML
+        )
+        return
+
+    job = new_job(
+        user_id=update.effective_user.id,
+        chat_id=update.effective_chat.id,
+        source=source,
+        host="gofile",
+        source_kind=source_kind,
+        torrent_path=torrent_path,
     )
-    display = source if len(source) <= 300 else source[:297] + "…"
-    await update.effective_message.reply_text(
-        "Where should I upload this?\n"
-        f"<code>{html.escape(display)}</code>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=_host_keyboard(settings, token),
-        disable_web_page_preview=True,
-    )
+    await _start_job(context, job, None)
 
 
 # -------------------------------------------------------------------- commands
@@ -316,19 +268,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(
         "<b>Mirror bot</b>\n\n"
         "Send me a link, a magnet link, or a <code>.torrent</code> file. "
-        "I download it and upload it to Gofile, Pixeldrain, or send it straight "
-        "to this chat.\n\n"
-        "Telegram's cloud Bot API caps bot uploads at 50 MB, so larger files "
-        "sent here are split into numbered 45 MB parts automatically. Use "
-        "/gf for large files if you prefer a single Gofile link.\n\n"
+        "I download it and upload it to Gofile, then reply with the public link.\n\n"
         "Direct files, pages with a download button, and video sites are supported.\n\n"
         "<b>Commands</b>\n"
         "/gf &lt;link&gt; — upload to Gofile\n"
-        "/l &lt;link&gt; — send to this Telegram chat\n"
-        "/mirror &lt;link&gt; [gofile|pixeldrain|telegram] — choose a host explicitly\n"
+        "/mirror &lt;link&gt; — same as /gf\n"
         "/status — active jobs\n"
         "/cancel — cancel your jobs\n"
-        "/hosts — upload destinations\n"
         "/id — show your Telegram ID",
         parse_mode=ParseMode.HTML,
         disable_web_page_preview=True,
@@ -350,75 +296,12 @@ async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def cmd_hosts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    settings: Settings = context.application.bot_data["settings"]
-    if not _authorized(update, settings):
-        await _deny(update, settings)
-        return
-    status = host_status(settings)
-    lines = ["<b>Upload destinations</b>"]
-    for name, label in HOST_LABELS.items():
-        usable, reason = status[name]
-        if usable:
-            lines.append(f"✅ <b>{label}</b>")
-        else:
-            lines.append(f"⚠️ <b>{label}</b> — {html.escape(reason)}")
-    await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
-
-
-async def cmd_mirror(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    settings: Settings = context.application.bot_data["settings"]
-    if not _authorized(update, settings):
-        await _deny(update, settings)
-        return
-
-    args = context.args or []
-    source = None
-    host = settings.default_host
-    aliases = {
-        "gofile": "gofile",
-        "pixeldrain": "pixeldrain",
-        "telegram": "telegram",
-        "tg": "telegram",
-        "chat": "telegram",
-    }
-    for arg in args:
-        found = extract_url(arg)
-        if found and source is None:
-            source = found
-        elif arg.lower() in aliases:
-            host = aliases[arg.lower()]
-
-    if not source:
-        await update.effective_message.reply_text(
-            "Usage: <code>/mirror &lt;link&gt; [gofile|pixeldrain|telegram]</code>\n"
-            "Or just send a link and pick a host.",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-
-    usable, reason = get_uploader(host, settings).available()
-    if not usable:
-        await update.effective_message.reply_text(f"⚠️ {html.escape(reason)}", parse_mode=ParseMode.HTML)
-        return
-
-    job = new_job(
-        user_id=update.effective_user.id,
-        chat_id=update.effective_chat.id,
-        source=source,
-        host=host,
-    )
-    await _start_job(context, job, None)
-
-
-async def _mirror_direct(
+async def _cmd_link(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
     *,
-    host: str,
     command: str,
 ) -> None:
-    """Start a job on a fixed host, e.g. /gf <link> or /l <link>."""
     settings: Settings = context.application.bot_data["settings"]
     if not _authorized(update, settings):
         await _deny(update, settings)
@@ -438,28 +321,15 @@ async def _mirror_direct(
         )
         return
 
-    usable, reason = get_uploader(host, settings).available()
-    if not usable:
-        await update.effective_message.reply_text(
-            f"⚠️ {html.escape(reason)}", parse_mode=ParseMode.HTML
-        )
-        return
+    await _submit_job(update, context, source=source)
 
-    job = new_job(
-        user_id=update.effective_user.id,
-        chat_id=update.effective_chat.id,
-        source=source,
-        host=host,
-    )
-    await _start_job(context, job, None)
+
+async def cmd_mirror(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _cmd_link(update, context, command="mirror")
 
 
 async def cmd_gf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _mirror_direct(update, context, host="gofile", command="gf")
-
-
-async def cmd_l(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _mirror_direct(update, context, host="telegram", command="l")
+    await _cmd_link(update, context, command="gf")
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -512,7 +382,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _authorized(update, settings):
         await _deny(update, settings)
         return
-    await _queue_picker(update, context, source=source)
+    await _submit_job(update, context, source=source)
 
 
 async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -547,7 +417,7 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await message.reply_text(f"Could not download that .torrent file: {exc}")
         return
 
-    await _queue_picker(
+    await _submit_job(
         update,
         context,
         source=sanitize_filename(name, "file.torrent"),
@@ -567,37 +437,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     parts = query.data.split(":")
-    if parts[0] == "pick" and len(parts) == 3:
-        token, host = parts[1], parts[2]
-        pending: dict[str, Pending] = context.application.bot_data.get("pending", {})
-        item = pending.get(token)
-        if not item or item.user_id != update.effective_user.id:
-            await query.answer("This menu expired. Send the link again.", show_alert=True)
-            return
-        if host not in HOST_LABELS:
-            await query.answer("Unknown upload destination.", show_alert=True)
-            return
-        usable, reason = get_uploader(host, settings).available()
-        if not usable:
-            await query.answer(reason, show_alert=True)
-            return
-
-        pending.pop(token, None)
-        await query.answer()
-        try:
-            await query.edit_message_text("Starting…")
-        except TelegramError:
-            pass
-
-        job = new_job(
-            user_id=update.effective_user.id,
-            chat_id=update.effective_chat.id,
-            source=item.source,
-            host=host,
-            source_kind=item.source_kind,
-            torrent_path=item.torrent_path,
+    if parts[0] == "pick":
+        await query.answer(
+            "That menu is no longer used. Send the link again.", show_alert=True
         )
-        await _start_job(context, job, query.message)
         return
 
     if parts[0] == "cancel" and len(parts) == 2:
@@ -635,11 +478,9 @@ async def post_init(app: Application) -> None:
             [
                 BotCommand("start", "Welcome and usage"),
                 BotCommand("gf", "Upload to Gofile: /gf <link>"),
-                BotCommand("l", "Send to this chat: /l <link>"),
-                BotCommand("mirror", "Mirror a link: /mirror <link> [host]"),
+                BotCommand("mirror", "Upload to Gofile: /mirror <link>"),
                 BotCommand("status", "Show active jobs"),
                 BotCommand("cancel", "Cancel your jobs"),
-                BotCommand("hosts", "Upload destinations"),
                 BotCommand("id", "Show your Telegram ID"),
             ]
         )
@@ -650,7 +491,6 @@ async def post_init(app: Application) -> None:
 def _register(app: Application, settings: Settings, manager: JobManager) -> None:
     app.bot_data["settings"] = settings
     app.bot_data["manager"] = manager
-    app.bot_data["pending"] = {}
     app.bot_data["reporters"] = set()
     app.bot_data["state_lock"] = asyncio.Lock()
     app.bot_data["accepting_jobs"] = True
@@ -659,11 +499,9 @@ def _register(app: Application, settings: Settings, manager: JobManager) -> None
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("gf", cmd_gf))
-    app.add_handler(CommandHandler("l", cmd_l))
     app.add_handler(CommandHandler("mirror", cmd_mirror))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
-    app.add_handler(CommandHandler("hosts", cmd_hosts))
     app.add_handler(CommandHandler("id", cmd_id))
     app.add_handler(MessageHandler(filters.Document.ALL, on_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
@@ -704,10 +542,9 @@ async def run_bot(settings: Settings) -> None:
         drop_pending_updates=False,
     )
     logger.info(
-        "Bot polling started (run_seconds=%s, max_file_size=%s, hosts=%s)",
+        "Bot polling started (run_seconds=%s, max_file_size=%s, uploader=Gofile)",
         settings.run_seconds or "unlimited",
         human_size(settings.max_file_size),
-        ",".join(HOST_LABELS),
     )
 
     stop_event = asyncio.Event()

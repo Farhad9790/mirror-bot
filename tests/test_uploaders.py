@@ -2,11 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from mirror.config import Settings
-from mirror.errors import UploadError, UploaderUnavailable
-from mirror.uploaders import host_status
+from mirror.errors import UploadError
 from mirror.uploaders.gofile import GofileUploader
-from mirror.uploaders.pixeldrain import PixeldrainUploader
 from mirror.utils import CancelToken
 
 
@@ -29,34 +26,17 @@ class FakeSession:
         self.response = response
         self.last_url: str | None = None
         self.last_headers: dict | None = None
-        self.last_auth = None
         self.last_data = None
 
-    def _consume(self, data) -> None:
+    def post(self, url, data=None, headers=None, timeout=None):
+        self.last_url = url
+        self.last_headers = headers
         self.last_data = data
         while True:
             chunk = data.read(64 * 1024)
             if not chunk:
                 break
-
-    def post(self, url, data=None, headers=None, timeout=None):
-        self.last_url = url
-        self.last_headers = headers
-        self._consume(data)
         return self.response
-
-    def put(self, url, data=None, headers=None, auth=None, timeout=None):
-        self.last_url = url
-        self.last_headers = headers
-        self.last_auth = auth
-        self._consume(data)
-        return self.response
-
-
-def test_host_status_includes_telegram():
-    status = host_status(Settings(telegram_token="x"))
-    assert status["gofile"] == (True, "")
-    assert status["telegram"] == (True, "")
 
 
 def test_gofile_guest_upload(tmp_path):
@@ -104,39 +84,5 @@ def test_gofile_rejects_bad_token(tmp_path):
     session = FakeSession(FakeResponse(401, text="unauthorized"))
     with pytest.raises(UploadError):
         GofileUploader(token="bad", session=session).upload(
-            source, lambda percent, detail: None, CancelToken()
-        )
-
-
-def test_pixeldrain_requires_key(tmp_path):
-    source = tmp_path / "hello.txt"
-    source.write_text("hello")
-    uploader = PixeldrainUploader(None)
-    usable, reason = uploader.available()
-    assert not usable
-    assert "PIXELDRAIN_API_KEY" in reason
-    with pytest.raises(UploaderUnavailable):
-        uploader.upload(source, lambda percent, detail: None, CancelToken())
-
-
-def test_pixeldrain_upload(tmp_path):
-    source = tmp_path / "my file.txt"
-    source.write_text("hello")
-    response = FakeResponse(201, {"success": True, "id": "abc123"})
-    session = FakeSession(response)
-    uploader = PixeldrainUploader("api-key", session=session)
-    result = uploader.upload(source, lambda percent, detail: None, CancelToken())
-    assert result.url == "https://pixeldrain.com/u/abc123"
-    assert session.last_url == "https://pixeldrain.com/api/file/my%20file.txt"
-    assert session.last_auth == ("", "api-key")
-    assert session.last_headers["Content-Length"] == "5"
-
-
-def test_pixeldrain_rejects_bad_key(tmp_path):
-    source = tmp_path / "hello.txt"
-    source.write_text("hello")
-    session = FakeSession(FakeResponse(401, text="authentication_required"))
-    with pytest.raises(UploadError):
-        PixeldrainUploader("bad", session=session).upload(
             source, lambda percent, detail: None, CancelToken()
         )

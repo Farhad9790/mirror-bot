@@ -1,6 +1,6 @@
 # Telegram Mirror Bot
 
-A Telegram bot that takes a link, downloads the file, and re-uploads it to **Gofile**, **Pixeldrain**, or sends it **directly to the Telegram chat**.
+A Telegram bot that takes a link, downloads the file, and re-uploads it to **Gofile**.
 
 It handles direct file links, web pages where the file is hidden behind a "Download" button, video sites supported by yt-dlp, magnet links, and `.torrent` files.
 
@@ -14,11 +14,10 @@ Telegram link / .torrent
    aria2c (HTTP / torrent)  or  yt-dlp (video sites)
           │
           ▼
-   Gofile guest/account upload, Pixeldrain API upload,
-   or Telegram chat (auto-split into 45 MB parts)
+   Gofile guest/account upload
           │
           ▼
-   Public link or files sent back in Telegram
+   Public Gofile link sent back in Telegram
 ```
 
 ## Features
@@ -29,8 +28,6 @@ Telegram link / .torrent
 - Video sites through yt-dlp (YouTube, Vimeo, TikTok, X/Twitter, Reddit, etc.).
 - Magnet links and `.torrent` files through aria2c (DHT enabled, seeding disabled).
 - Gofile guest uploads work with no account. An optional `GOFILE_TOKEN` uses your account.
-- Pixeldrain uploads with an API key (Pixeldrain no longer allows anonymous uploads).
-- **Telegram chat delivery:** files up to 45 MB are sent as a document; larger files are split into numbered 45 MB parts, sent one at a time, with rejoin instructions in the first caption.
 - Progress bars, cancel buttons, per-user job limits, size limits and timeouts.
 - Private mode with `ALLOWED_USER_IDS`.
 - Runs on GitHub Actions, Docker, or any small VPS.
@@ -62,14 +59,13 @@ Telegram link / .torrent
    |---|---|---|
    | `TELEGRAM_BOT_TOKEN` | yes | BotFather token |
    | `ALLOWED_USER_IDS` | recommended | Comma-separated IDs, e.g. `123456789,987654321` |
-   | `PIXELDRAIN_API_KEY` | for Pixeldrain | From [pixeldrain.com/user/api_keys](https://pixeldrain.com/user/api_keys) |
    | `GOFILE_TOKEN` | optional | Uses your Gofile account instead of guest uploads |
 
-   Optional repository **variables** (Settings → Secrets and variables → Actions → Variables): `DEFAULT_HOST` (`gofile`), `MAX_FILE_SIZE` (`8G`), `MAX_CONCURRENT_JOBS` (`1`), `JOB_TIMEOUT` (`7200`), `MULTI_FILE_MODE` (`largest`), `YTDLP_FORMAT` (`bv*+ba/b`).
+   Optional repository **variables** (Settings → Secrets and variables → Actions → Variables): `MAX_FILE_SIZE` (`8G`), `MAX_CONCURRENT_JOBS` (`1`), `JOB_TIMEOUT` (`7200`), `MULTI_FILE_MODE` (`largest`), `YTDLP_FORMAT` (`bv*+ba/b`).
 
 5. **Enable Actions and run it.** Open the **Actions** tab → **Telegram Mirror Bot** → **Run workflow**. Wait for the job to start, then send your bot a link.
 
-6. **Choose Gofile, Pixeldrain, or Telegram chat** with the inline buttons. The bot downloads and either replies with a public link or sends the file(s) directly to the chat.
+6. **Send a link.** The bot downloads the file, uploads it to Gofile, and replies with the public link.
 
 ### GitHub Actions limitations
 
@@ -137,16 +133,12 @@ The image includes aria2 and ffmpeg. Downloads and state live in `/data`.
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | — | BotFather token (required) |
 | `ALLOWED_USER_IDS` | empty | Comma-separated Telegram user IDs. Empty means anyone can use the bot. |
-| `DEFAULT_HOST` | `gofile` | Host used by `/mirror <link>` without an explicit host |
 | `GOFILE_TOKEN` | empty | Optional Gofile account token. Empty = guest uploads. |
-| `PIXELDRAIN_API_KEY` | empty | Required for Pixeldrain |
 | `MAX_FILE_SIZE` | `8G` | Maximum downloaded file size |
 | `MAX_CONCURRENT_JOBS` | `2` | Parallel jobs (`1` in the Actions workflow) |
 | `JOB_TIMEOUT` | `7200` | Per-job timeout in seconds |
 | `BOT_RUN_SECONDS` | `0` | Stop after N seconds; `0` = run until stopped |
 | `MULTI_FILE_MODE` | `largest` | For torrents/multi-file downloads: upload the largest file, or `zip` everything |
-| `TELEGRAM_UPLOAD_LIMIT` | `45M` | Files up to this size are sent whole to Telegram |
-| `TELEGRAM_PART_SIZE` | `45M` | Part size used when a Telegram file is split (keep below the 50 MB Bot API limit) |
 | `YTDLP_FORMAT` | `bv*+ba/b` | yt-dlp format selector |
 | `COOKIES_FILE` | empty | Optional Netscape cookies file for restricted video sites |
 | `DOWNLOAD_DIR` | `downloads` | Temporary download directory |
@@ -160,12 +152,10 @@ The image includes aria2 and ffmpeg. Downloads and state live in `/data`.
 | Command | Description |
 |---|---|
 | `/start`, `/help` | Usage |
-| `/gf <link>` | Upload to Gofile without the host picker |
-| `/l <link>` | Send directly to this Telegram chat without the host picker |
-| `/mirror <link> [gofile\|pixeldrain\|telegram]` | Skip the host picker (`tg` and `chat` also work) |
+| `/gf <link>` | Upload to Gofile |
+| `/mirror <link>` | Same as `/gf` |
 | `/status` | Active jobs |
 | `/cancel` | Cancel your active jobs |
-| `/hosts` | Show configured upload destinations |
 | `/id` | Show your Telegram user/chat ID |
 
 You can also send a link, a magnet link, or a `.torrent` file directly.
@@ -179,7 +169,7 @@ You can also send a link, a magnet link, or a `.torrent` file directly.
 | GitHub releases | ✅ GitHub API picks the first asset |
 | Google Drive single files | ✅ converted to a direct download URL |
 | Dropbox share links | ✅ `dl=1` |
-| Pixeldrain file links | ✅ direct API URL |
+| Pixeldrain file links (download only) | ✅ direct API URL |
 | MediaFire / SourceForge / similar pages | ✅ when the download link is in the HTML |
 | YouTube, Vimeo, TikTok, X, Reddit, etc. | ✅ yt-dlp |
 | Magnet links and `.torrent` files | ✅ aria2c |
@@ -194,8 +184,6 @@ The resolver is intentionally best-effort. Sites that build download links in Ja
 
 **"That page does not expose a direct file"** — the page needs a login, CAPTCHA, or JavaScript that the resolver cannot execute. Try the original file URL.
 
-**Pixeldrain button says "no API key"** — create an API key at [pixeldrain.com/user/api_keys](https://pixeldrain.com/user/api_keys) and add `PIXELDRAIN_API_KEY` as a secret.
-
 **Gofile says the token is rejected** — remove `GOFILE_TOKEN` to use guest uploads, or create a fresh token from your Gofile profile.
 
 **Torrents do not start** — install aria2c (`aria2c --version`) and make sure the workflow/Docker image includes it. A magnet with no seeders stops after 5 minutes (`--bt-stop-timeout=300`).
@@ -203,16 +191,6 @@ The resolver is intentionally best-effort. Sites that build download links in Ja
 **Video download fails** — update yt-dlp (`pip install -U yt-dlp`). Age/region-locked sites may need `COOKIES_FILE`. GitHub Actions IPs are frequently blocked by YouTube; a VPS is more reliable for video sites.
 
 **Torrents do not connect** — many datacenter networks block BitTorrent. Try a VPS, or use a direct link.
-
-**Telegram says the file is too big** — the cloud Bot API allows bots to upload up to 50 MB. Keep `TELEGRAM_UPLOAD_LIMIT` and `TELEGRAM_PART_SIZE` at `45M` or lower.
-
-**How do I rejoin Telegram split parts?** — download every part, then:
-- Windows: `copy /b "movie.mkv.part*" "movie.mkv"`
-- Linux/macOS: `cat movie.mkv.part* > movie.mkv`
-
-The parts are byte-for-byte pieces of the original file, not a compressed archive. All parts are required.
-
-**Telegram split sending is slow or rate-limited** — many parts take time and can hit Telegram flood limits. The bot retries automatically. For very large files, Gofile is usually faster than Telegram.
 
 **The Actions run stops after 4h45m** — that is expected. The next scheduled run starts within about 15 minutes plus GitHub's cron delay.
 
@@ -225,7 +203,7 @@ The parts are byte-for-byte pieces of the original file, not a compressed archiv
 - Set `ALLOWED_USER_IDS`. An open bot lets anyone use your runner, API keys and bandwidth.
 - The bot blocks localhost/private-network URLs to reduce SSRF risk, but do not expose it to untrusted users.
 - Never commit `.env` or tokens. The GitHub Actions secrets are the right place.
-- Only mirror content you have the right to copy. Respect the terms of service of the source site and of Gofile/Pixeldrain.
+- Only mirror content you have the right to copy. Respect the terms of service of the source site and Gofile.
 - Gofile guest uploads create a new public folder per upload. Use `GOFILE_TOKEN` if you want uploads tied to your account.
 
 ## Tests
@@ -235,7 +213,7 @@ pip install -r requirements.txt -r requirements-dev.txt
 pytest -q
 ```
 
-The tests cover URL/filename handling, the HTML download-button resolver, all three uploaders with mocked HTTP responses, the Telegram splitter, and the downloader's file collection logic.
+The tests cover URL/filename handling, the HTML download-button resolver, the Gofile uploader with mocked HTTP responses, command parsing, and the downloader's file collection logic.
 
 ## Project layout
 
@@ -249,8 +227,6 @@ mirror/
   state.py                 Telegram update offset persistence
   uploaders/
     gofile.py              Gofile upload fleet API
-    pixeldrain.py          Pixeldrain API
-    telegram.py            Direct chat delivery with automatic splitting
 .github/workflows/
   bot.yml                  Scheduled bot run on GitHub Actions
   tests.yml                Unit tests
