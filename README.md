@@ -32,7 +32,7 @@ Telegram link / .torrent / file
 - Gofile guest uploads work with no account. An optional `GOFILE_TOKEN` uses your account.
 - Progress bars, cancel buttons, per-user job limits, size limits and timeouts.
 - Private mode with `ALLOWED_USER_IDS`.
-- Runs on GitHub Actions, Docker, or any small VPS.
+- Runs on GitHub Actions with automatic run hand-off, Docker, or any small VPS.
 
 ## Quick start on GitHub Actions
 
@@ -63,7 +63,7 @@ Telegram link / .torrent / file
    | `ALLOWED_USER_IDS` | recommended | Comma-separated IDs, e.g. `123456789,987654321` |
    | `GOFILE_TOKEN` | optional | Uses your Gofile account for uploads and share-link downloads instead of guest tokens |
 
-   Optional repository **variables** (Settings → Secrets and variables → Actions → Variables): `MAX_FILE_SIZE` (`8G`), `MAX_CONCURRENT_JOBS` (`1`), `JOB_TIMEOUT` (`7200`), `MULTI_FILE_MODE` (`largest`), `YTDLP_FORMAT` (`bv*+ba/b`), `GOFILE_WT_SALT` (only needed if Gofile rotates its website-token salt).
+   Optional repository **variables** (Settings → Secrets and variables → Actions → Variables): `MAX_FILE_SIZE` (`8G`), `MAX_CONCURRENT_JOBS` (`1`), `JOB_TIMEOUT` (`7200`), `MULTI_FILE_MODE` (`largest`), `YTDLP_FORMAT` (`bv*+ba/b`), `GOFILE_WT_SALT` (only needed if Gofile rotates its website-token salt), `AUTO_RESTART` (`true`; set to `false` to stop the automatic hand-off).
 
 5. **Enable Actions and run it.** Open the **Actions** tab → **Telegram Mirror Bot** → **Run workflow**. Wait for the job to start, then send your bot a link.
 
@@ -71,18 +71,19 @@ Telegram link / .torrent / file
 
 ### GitHub Actions limitations
 
-- **One job is capped at 6 hours.** The workflow runs for 4h45m every 5 hours (`BOT_RUN_SECONDS=17100`). Messages sent during the short gap are delivered on the next run because Telegram keeps updates for 24 hours.
+- **One job is capped at 6 hours.** Each run polls for 4h45m (`BOT_RUN_SECONDS=17100`), then queues the next run before exiting. The 5-hour schedule is a fallback. A run that crashes without queuing is restarted by the keep-alive workflow within about 30 minutes. Messages sent while no run is active are delivered when the next run starts because Telegram keeps updates for 24 hours.
+- **Only one poller at a time.** Telegram allows a single `getUpdates` consumer per bot token, so the workflow's concurrency group serializes runs. A single run can still process several uploads concurrently via `MAX_CONCURRENT_JOBS`.
 - **Cron is not exact.** GitHub can delay scheduled runs by several minutes.
 - **Private repos run out of minutes.** 2,000 minutes/month is roughly 33 hours; this bot needs ~720 hours/month. Use a public repo or a real host.
 - **Disk is limited.** The standard runner has about 14 GB of SSD. The default `MAX_FILE_SIZE=8G` and `MAX_CONCURRENT_JOBS=1` are chosen to fit. Lower them if you mirror many files.
 - **Scheduled workflows can be disabled after 60 days without repository activity.** This workflow commits `.state/telegram.json` after each run, which keeps the repository active and also resumes the Telegram update offset.
 - **State commits.** The workflow pushes a tiny state commit (`chore: update bot state [skip ci]`) when the Telegram offset changes, plus a weekly heartbeat so GitHub does not disable the schedule after 60 idle days. If `main` is protected, allow GitHub Actions to push, or change the workflow to use a cache instead.
 - **Actions logs are public in a public repo.** Do not print tokens; the bot does not log them.
-- **No inbound webhook.** The bot uses long polling, so it only handles messages while a workflow run is active.
+- **No inbound webhook.** The bot uses long polling, so it only handles messages while a workflow run is active. The keep-alive workflow starts runs; it does not receive messages itself.
 - **Datacenter IPs get blocked.** YouTube and other video sites often ask for a sign-in from GitHub's IPs, and BitTorrent traffic may be throttled. For heavy video/torrent use, run the Docker image on a VPS.
 - **End-of-run grace period.** The bot stops accepting new jobs when its run is ending and waits up to 20 minutes for active jobs to finish.
 
-For real 24/7 operation, deploy the included Docker image to a VPS, Render, Railway, Fly.io, or similar.
+The automatic hand-off makes Actions effectively continuous, but it is still best-effort: GitHub can delay or disable schedules, and a run that fails before the hand-off waits for the keep-alive check. For guaranteed 24/7 operation, deploy the included Docker image to a VPS, Render, Railway, Fly.io, or similar.
 
 ## Local setup
 
@@ -200,7 +201,9 @@ The resolver is intentionally best-effort. Sites that build download links in Ja
 
 **Torrents do not connect** — many datacenter networks block BitTorrent. Try a VPS, or use a direct link.
 
-**The Actions run stops after 4h45m** — that is expected. The next scheduled run starts within about 15 minutes plus GitHub's cron delay.
+**The Actions run stops after 4h45m** — that is expected. The run queues its successor before exiting, so the bot normally comes back within a minute or two. The keep-alive workflow also checks every 30 minutes.
+
+**The bot is offline for more than 30 minutes** — open the Actions tab and check for failed runs. If the `Queue next run` step failed, the keep-alive workflow should start a new run within 30 minutes; you can also run the workflow manually. To stop automatic restarts, set the repository variable `AUTO_RESTART` to `false` and disable the workflow.
 
 **The state push fails** — the repository's default branch is probably protected. Allow GitHub Actions to push, or replace the state step with `actions/cache` restore/save.
 

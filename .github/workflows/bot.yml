@@ -2,7 +2,7 @@ name: Telegram Mirror Bot
 
 on:
   schedule:
-    # Every 5 hours. The job runs for ~4h45m, so there is a small gap between runs.
+    # Fallback if the automatic hand-off fails. Runs normally queue themselves.
     - cron: "0 */5 * * *"
   workflow_dispatch:
 
@@ -12,6 +12,7 @@ concurrency:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   run:
@@ -56,11 +57,13 @@ jobs:
         run: df -h /
 
       - name: Run bot
+        id: bot
         env:
           DOWNLOAD_DIR: ${{ runner.temp }}/mirror-downloads
         run: python -m bot
 
       - name: Persist Telegram update offset
+        id: persist
         if: always()
         run: |
           set -e
@@ -112,3 +115,17 @@ jobs:
       - name: Clean downloads
         if: always()
         run: rm -rf "${{ runner.temp }}/mirror-downloads"
+
+      # Keep the bot online without a VPS. Dispatching while this run still
+      # holds the concurrency group queues the next run, so it starts as soon
+      # as this one exits. Telegram still sees only one poller at a time.
+      - name: Queue next run
+        if: >-
+          always() && !cancelled() &&
+          steps.bot.outcome == 'success' &&
+          steps.persist.outcome == 'success' &&
+          vars.AUTO_RESTART != 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run bot.yml --ref "${{ github.ref_name }}"

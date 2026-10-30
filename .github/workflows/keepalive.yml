@@ -1,0 +1,34 @@
+name: Keep Telegram Mirror Bot alive
+
+on:
+  schedule:
+    # Recovery check. The bot workflow normally queues its own successor.
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: telegram-mirror-keepalive
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Start the bot if no run is active or queued
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          active="$(gh run list --workflow bot.yml --limit 10 --json status --jq '[.[] | select(.status != "completed")] | length')"
+          if [ "$active" -eq 0 ]; then
+            echo "No bot run is active; starting one."
+            gh workflow run bot.yml --ref "${{ github.event.repository.default_branch }}"
+          else
+            echo "Bot run already active or queued."
+          fi
