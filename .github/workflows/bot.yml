@@ -31,7 +31,6 @@ jobs:
       JOB_TIMEOUT: ${{ vars.JOB_TIMEOUT || '7200' }}
       YTDLP_FORMAT: ${{ vars.YTDLP_FORMAT || 'bv*+ba/b' }}
       BOT_RUN_SECONDS: "17100"
-      DOWNLOAD_DIR: ${{ runner.temp }}/mirror-downloads
       STATE_FILE: .state/telegram.json
       LOG_LEVEL: INFO
 
@@ -58,6 +57,8 @@ jobs:
         run: df -h /
 
       - name: Run bot
+        env:
+          DOWNLOAD_DIR: ${{ runner.temp }}/mirror-downloads
         run: python -m bot
 
       - name: Persist Telegram update offset
