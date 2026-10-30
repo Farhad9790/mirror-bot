@@ -76,6 +76,9 @@ class Downloader:
         if link.kind == "ytdlp":
             return self._ytdlp(original_url, dest, progress)
 
+        if link.parts:
+            return self._download_parts(link, dest, progress)
+
         if link.size and link.size > self.max_size:
             raise FileTooLarge(
                 f"The file is {human_size(link.size)}, above the {human_size(self.max_size)} limit."
@@ -86,7 +89,7 @@ class Downloader:
         except (JobCancelled, JobTimeout, FileTooLarge):
             raise
         except DownloadError as exc:
-            if not self._ytdlp_available():
+            if not link.allow_ytdlp_fallback or not self._ytdlp_available():
                 raise
             progress(None, "Direct download failed, trying video extractor…")
             try:
@@ -102,6 +105,45 @@ class Downloader:
             return self._aria2_http(link, dest, progress)
         logger.warning("%s not found; falling back to the Python downloader", self.settings.aria2c_path)
         return self._requests_download(link, dest, progress)
+
+    def _download_parts(
+        self, link: ResolvedLink, dest: Path, progress: ProgressCB
+    ) -> DownloadResult:
+        parts = list(link.parts)
+        skipped = 0
+        if self.settings.multi_file_mode == "largest":
+            parts.sort(key=lambda item: item.size or 0, reverse=True)
+            skipped = max(0, len(parts) - 1)
+            parts = parts[:1]
+
+        if len(parts) == 1:
+            result = self._http(parts[0], dest, progress)
+            if skipped:
+                result.extras += skipped
+            return result
+
+        total = len(parts)
+        for index, part in enumerate(parts, 1):
+            sub = dest / f"part-{index:03d}"
+            sub.mkdir(parents=True, exist_ok=True)
+
+            def part_progress(
+                percent: Optional[float],
+                detail: str,
+                *,
+                index: int = index,
+                total: int = total,
+            ) -> None:
+                progress(percent, f"File {index}/{total} · {detail}")
+
+            self._http(part, sub, part_progress)
+
+        result = self._collect(dest)
+        if result.size > self.max_size:
+            raise FileTooLarge(
+                f"The file is {human_size(result.size)}, above the {human_size(self.max_size)} limit."
+            )
+        return result
 
     def _aria2_http(self, link: ResolvedLink, dest: Path, progress: ProgressCB) -> DownloadResult:
         out_name = sanitize_filename(link.filename or filename_from_url(link.url), "download.bin")
@@ -126,6 +168,9 @@ class Downloader:
         ]
         if link.referer:
             args.append(f"--referer={link.referer}")
+        if link.headers:
+            for key, value in link.headers.items():
+                args.append(f"--header={key}: {value}")
         args.append(link.url)
 
         self._run_aria2(args, dest, progress, label="download")
@@ -267,6 +312,8 @@ class Downloader:
         headers = {"User-Agent": USER_AGENT}
         if link.referer:
             headers["Referer"] = link.referer
+        if link.headers:
+            headers.update(link.headers)
 
         try:
             response = requests.get(
@@ -282,7 +329,7 @@ class Downloader:
         try:
             response.raise_for_status()
             content_type = (response.headers.get("content-type") or "").lower()
-            if "text/html" in content_type:
+            if "text/html" in content_type and not link.force_download:
                 raise DownloadError("The server returned a web page instead of a file.")
             remote_name = filename_from_headers(response.headers)
             if remote_name and (link.filename is None or link.filename == "download.bin"):

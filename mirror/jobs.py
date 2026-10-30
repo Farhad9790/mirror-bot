@@ -20,6 +20,7 @@ from .errors import (
     JobCancelled,
     JobTimeout,
     MirrorError,
+    NoFallbackResolutionError,
     ResolutionError,
     UploaderUnavailable,
 )
@@ -177,16 +178,21 @@ class JobManager:
                 )
             else:
                 job.update(stage="resolving", detail="Looking for the direct link…")
-                resolver = Resolver(allow_private_urls=self.settings.allow_private_urls)
+                resolver = Resolver(
+                    allow_private_urls=self.settings.allow_private_urls,
+                    gofile_token=self.settings.gofile_token,
+                )
                 try:
                     link = resolver.resolve(job.source)
+                except NoFallbackResolutionError:
+                    raise
                 except ResolutionError as exc:
                     logger.info("Resolution failed (%s); trying yt-dlp", type(exc).__name__)
                     job.update(stage="resolving", detail="Trying the video extractor…")
                     link = ResolvedLink(url=job.source, kind="ytdlp")
 
             job.cancel.check()
-            if link.size and link.size > self.settings.max_file_size:
+            if not link.parts and link.size and link.size > self.settings.max_file_size:
                 raise FileTooLarge(
                     f"The file is {human_size(link.size)}, above the "
                     f"{human_size(self.settings.max_file_size)} limit."

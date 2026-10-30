@@ -23,6 +23,7 @@ jobs:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       ALLOWED_USER_IDS: ${{ secrets.ALLOWED_USER_IDS }}
       GOFILE_TOKEN: ${{ secrets.GOFILE_TOKEN }}
+      GOFILE_WT_SALT: ${{ vars.GOFILE_WT_SALT || '12af056dacea0b' }}
       MAX_FILE_SIZE: ${{ vars.MAX_FILE_SIZE || '8G' }}
       MAX_CONCURRENT_JOBS: ${{ vars.MAX_CONCURRENT_JOBS || '1' }}
       MULTI_FILE_MODE: ${{ vars.MULTI_FILE_MODE || 'largest' }}

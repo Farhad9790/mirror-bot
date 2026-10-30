@@ -15,6 +15,10 @@ class ResolutionError(MirrorError):
     """A page did not expose a downloadable file."""
 
 
+class NoFallbackResolutionError(ResolutionError):
+    """Resolution failed and retrying the source with yt-dlp would not help."""
+
+
 class DownloadError(MirrorError):
     """Downloading the remote file failed."""
 

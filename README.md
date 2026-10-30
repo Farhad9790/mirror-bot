@@ -24,9 +24,10 @@ Telegram link / .torrent
 
 - Direct HTTP/HTTPS downloads with aria2c multi-connection downloading.
 - "Download button" pages: scans links, buttons, `data-*` URLs, meta refresh, embedded video/audio, JSON-LD and common JavaScript redirects.
-- Special handling for Google Drive single files, Dropbox, Pixeldrain links, MediaFire-style buttons, and GitHub releases.
+- Special handling for Google Drive single files, Dropbox, Pixeldrain links, Gofile share links, MediaFire-style buttons, and GitHub releases.
 - Video sites through yt-dlp (YouTube, Vimeo, TikTok, X/Twitter, Reddit, etc.).
 - Magnet links and `.torrent` files through aria2c (DHT enabled, seeding disabled).
+- Gofile share links (`gofile.io/d/...`) resolve through Gofile's API using a temporary guest token. Folder links are supported; the bot downloads the largest file or every file in `MULTI_FILE_MODE=zip`.
 - Gofile guest uploads work with no account. An optional `GOFILE_TOKEN` uses your account.
 - Progress bars, cancel buttons, per-user job limits, size limits and timeouts.
 - Private mode with `ALLOWED_USER_IDS`.
@@ -59,9 +60,9 @@ Telegram link / .torrent
    |---|---|---|
    | `TELEGRAM_BOT_TOKEN` | yes | BotFather token |
    | `ALLOWED_USER_IDS` | recommended | Comma-separated IDs, e.g. `123456789,987654321` |
-   | `GOFILE_TOKEN` | optional | Uses your Gofile account instead of guest uploads |
+   | `GOFILE_TOKEN` | optional | Uses your Gofile account for uploads and share-link downloads instead of guest tokens |
 
-   Optional repository **variables** (Settings → Secrets and variables → Actions → Variables): `MAX_FILE_SIZE` (`8G`), `MAX_CONCURRENT_JOBS` (`1`), `JOB_TIMEOUT` (`7200`), `MULTI_FILE_MODE` (`largest`), `YTDLP_FORMAT` (`bv*+ba/b`).
+   Optional repository **variables** (Settings → Secrets and variables → Actions → Variables): `MAX_FILE_SIZE` (`8G`), `MAX_CONCURRENT_JOBS` (`1`), `JOB_TIMEOUT` (`7200`), `MULTI_FILE_MODE` (`largest`), `YTDLP_FORMAT` (`bv*+ba/b`), `GOFILE_WT_SALT` (only needed if Gofile rotates its website-token salt).
 
 5. **Enable Actions and run it.** Open the **Actions** tab → **Telegram Mirror Bot** → **Run workflow**. Wait for the job to start, then send your bot a link.
 
@@ -164,18 +165,19 @@ You can also send a link, a magnet link, or a `.torrent` file directly.
 
 | Source | Support |
 |---|---|
-| Direct file URLs (`.zip`, `.mp4`, `.pdf`, …) | ✅ aria2c |
+| Direct file URLs (any type: `.zip`, `.iso`, `.apk`, `.pdf`, `.mp3`, `.mp4`, …) | ✅ aria2c |
 | Pages with a Download button | ✅ heuristic resolver |
 | GitHub releases | ✅ GitHub API picks the first asset |
 | Google Drive single files | ✅ converted to a direct download URL |
 | Dropbox share links | ✅ `dl=1` |
 | Pixeldrain file links (download only) | ✅ direct API URL |
+| Gofile share links (`gofile.io/d/...`) | ✅ Gofile API, guest token, folders supported |
 | MediaFire / SourceForge / similar pages | ✅ when the download link is in the HTML |
 | YouTube, Vimeo, TikTok, X, Reddit, etc. | ✅ yt-dlp |
 | Magnet links and `.torrent` files | ✅ aria2c |
 | MEGA links | ❌ encrypted |
 | Google Drive folders | ❌ not supported |
-| Gofile download pages | ❌ reading them requires a premium token |
+| Password-protected Gofile folders | ❌ not supported |
 | Login/CAPTCHA/DRM-protected pages | ❌ not supported |
 
 The resolver is intentionally best-effort. Sites that build download links in JavaScript after a login or CAPTCHA cannot be mirrored without site-specific code.
@@ -185,6 +187,8 @@ The resolver is intentionally best-effort. Sites that build download links in Ja
 **"That page does not expose a direct file"** — the page needs a login, CAPTCHA, or JavaScript that the resolver cannot execute. Try the original file URL.
 
 **Gofile says the token is rejected** — remove `GOFILE_TOKEN` to use guest uploads, or create a fresh token from your Gofile profile.
+
+**A Gofile share link fails** — the bot reads share links with a temporary guest token, so no account is needed. Password-protected folders are not supported. If Gofile changes its website-token salt, set `GOFILE_WT_SALT` to the current value from `https://gofile.io/js/wt.obf.js`; the default is `12af056dacea0b`.
 
 **Torrents do not start** — install aria2c (`aria2c --version`) and make sure the workflow/Docker image includes it. A magnet with no seeders stops after 5 minutes (`--bt-stop-timeout=300`).
 
@@ -213,7 +217,7 @@ pip install -r requirements.txt -r requirements-dev.txt
 pytest -q
 ```
 
-The tests cover URL/filename handling, the HTML download-button resolver, the Gofile uploader with mocked HTTP responses, command parsing, and the downloader's file collection logic.
+The tests cover URL/filename handling, the HTML download-button resolver, Gofile share-link resolution and the Gofile uploader with mocked HTTP responses, command parsing, and the downloader's header and file-collection logic.
 
 ## Project layout
 
