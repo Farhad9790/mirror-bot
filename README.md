@@ -160,6 +160,8 @@ The image includes aria2 and ffmpeg. Downloads and state live in `/data`.
 | Command | Description |
 |---|---|
 | `/start`, `/help` | Usage |
+| `/gf <link>` | Upload to Gofile without the host picker |
+| `/l <link>` | Send directly to this Telegram chat without the host picker |
 | `/mirror <link> [gofile\|pixeldrain\|telegram]` | Skip the host picker (`tg` and `chat` also work) |
 | `/status` | Active jobs |
 | `/cancel` | Cancel your active jobs |

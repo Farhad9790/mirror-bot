@@ -318,11 +318,14 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Send me a link, a magnet link, or a <code>.torrent</code> file. "
         "I download it and upload it to Gofile, Pixeldrain, or send it straight "
         "to this chat.\n\n"
-        "Files above Telegram's 45 MB bot upload limit are split into numbered "
-        "parts automatically.\n\n"
+        "Telegram's cloud Bot API caps bot uploads at 50 MB, so larger files "
+        "sent here are split into numbered 45 MB parts automatically. Use "
+        "/gf for large files if you prefer a single Gofile link.\n\n"
         "Direct files, pages with a download button, and video sites are supported.\n\n"
         "<b>Commands</b>\n"
-        "/mirror &lt;link&gt; [gofile|pixeldrain|telegram] — skip the host picker\n"
+        "/gf &lt;link&gt; — upload to Gofile\n"
+        "/l &lt;link&gt; — send to this Telegram chat\n"
+        "/mirror &lt;link&gt; [gofile|pixeldrain|telegram] — choose a host explicitly\n"
         "/status — active jobs\n"
         "/cancel — cancel your jobs\n"
         "/hosts — upload destinations\n"
@@ -406,6 +409,57 @@ async def cmd_mirror(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         host=host,
     )
     await _start_job(context, job, None)
+
+
+async def _mirror_direct(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    host: str,
+    command: str,
+) -> None:
+    """Start a job on a fixed host, e.g. /gf <link> or /l <link>."""
+    settings: Settings = context.application.bot_data["settings"]
+    if not _authorized(update, settings):
+        await _deny(update, settings)
+        return
+
+    source = None
+    for arg in context.args or []:
+        found = extract_url(arg)
+        if found:
+            source = found
+            break
+
+    if not source:
+        await update.effective_message.reply_text(
+            f"Usage: <code>/{command} &lt;link&gt;</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    usable, reason = get_uploader(host, settings).available()
+    if not usable:
+        await update.effective_message.reply_text(
+            f"⚠️ {html.escape(reason)}", parse_mode=ParseMode.HTML
+        )
+        return
+
+    job = new_job(
+        user_id=update.effective_user.id,
+        chat_id=update.effective_chat.id,
+        source=source,
+        host=host,
+    )
+    await _start_job(context, job, None)
+
+
+async def cmd_gf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _mirror_direct(update, context, host="gofile", command="gf")
+
+
+async def cmd_l(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _mirror_direct(update, context, host="telegram", command="l")
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -580,6 +634,8 @@ async def post_init(app: Application) -> None:
         await app.bot.set_my_commands(
             [
                 BotCommand("start", "Welcome and usage"),
+                BotCommand("gf", "Upload to Gofile: /gf <link>"),
+                BotCommand("l", "Send to this chat: /l <link>"),
                 BotCommand("mirror", "Mirror a link: /mirror <link> [host]"),
                 BotCommand("status", "Show active jobs"),
                 BotCommand("cancel", "Cancel your jobs"),
@@ -602,6 +658,8 @@ def _register(app: Application, settings: Settings, manager: JobManager) -> None
     app.add_handler(TypeHandler(Update, track_update), group=-1)
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("gf", cmd_gf))
+    app.add_handler(CommandHandler("l", cmd_l))
     app.add_handler(CommandHandler("mirror", cmd_mirror))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
