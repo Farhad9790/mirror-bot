@@ -576,7 +576,7 @@ async def _mirror_attachment(
             "Send a direct link to a larger file instead."
         )
         return
-    if size and size > settings.max_file_size:
+    if size and settings.max_file_size > 0 and size > settings.max_file_size:
         await message.reply_text(
             f"That file is {human_size(size)}, above the "
             f"{human_size(settings.max_file_size)} limit."
@@ -737,7 +737,7 @@ async def run_bot(settings: Settings) -> None:
     logger.info(
         "Bot polling started (run_seconds=%s, max_file_size=%s, uploader=Gofile)",
         settings.run_seconds or "unlimited",
-        human_size(settings.max_file_size),
+        human_size(settings.max_file_size) if settings.max_file_size > 0 else "unlimited",
     )
 
     stop_event = asyncio.Event()

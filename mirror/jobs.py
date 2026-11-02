@@ -26,7 +26,7 @@ from .errors import (
 )
 from .resolver import ResolvedLink, Resolver
 from .uploaders import UploadResult, get_uploader
-from .utils import CancelToken, human_size, safe_workdir
+from .utils import CancelToken, exceeds_limit, human_size, safe_workdir
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +176,7 @@ class JobManager:
                 extras = 0
                 if file_size == 0:
                     raise DownloadError("The Telegram file is empty.")
-                if file_size > self.settings.max_file_size:
+                if exceeds_limit(file_size, self.settings.max_file_size):
                     raise FileTooLarge(
                         f"The file is {human_size(file_size)}, above the "
                         f"{human_size(self.settings.max_file_size)} limit."
@@ -206,7 +206,9 @@ class JobManager:
                         link = ResolvedLink(url=job.source, kind="ytdlp")
 
                 job.cancel.check()
-                if not link.parts and link.size and link.size > self.settings.max_file_size:
+                if not link.parts and link.size and exceeds_limit(
+                    link.size, self.settings.max_file_size
+                ):
                     raise FileTooLarge(
                         f"The file is {human_size(link.size)}, above the "
                         f"{human_size(self.settings.max_file_size)} limit."
@@ -225,7 +227,7 @@ class JobManager:
 
                 if downloaded.size == 0:
                     raise DownloadError("The downloaded file is empty.")
-                if downloaded.size > self.settings.max_file_size:
+                if exceeds_limit(downloaded.size, self.settings.max_file_size):
                     raise FileTooLarge(
                         f"The file is {human_size(downloaded.size)}, above the "
                         f"{human_size(self.settings.max_file_size)} limit."

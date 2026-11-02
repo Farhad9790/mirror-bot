@@ -64,6 +64,24 @@ def test_requests_download(tmp_path):
 
 
 @responses.activate
+def test_requests_download_with_no_size_limit(tmp_path):
+    responses.add(
+        responses.GET,
+        "https://example.com/unlimited.bin",
+        body=b"hello",
+        headers={"Content-Type": "application/octet-stream", "Content-Length": "5"},
+    )
+    downloader = Downloader(make_settings(tmp_path, max_file_size=0), CancelToken())
+    result = downloader._requests_download(
+        ResolvedLink(url="https://example.com/unlimited.bin", filename="unlimited.bin"),
+        tmp_path,
+        lambda percent, detail: None,
+    )
+    assert result.path.read_bytes() == b"hello"
+    assert result.size == 5
+
+
+@responses.activate
 def test_requests_download_rejects_html(tmp_path):
     responses.add(
         responses.GET,

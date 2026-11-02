@@ -4,7 +4,7 @@ import pytest
 
 import mirror.jobs as jobs_module
 from mirror.config import Settings
-from mirror.errors import DownloadError, NoFallbackResolutionError
+from mirror.errors import DownloadError, FileTooLarge, NoFallbackResolutionError
 from mirror.jobs import JobManager, new_job
 from mirror.uploaders.base import UploadResult
 
@@ -65,6 +65,25 @@ def test_telegram_file_is_uploaded_without_resolving(tmp_path, monkeypatch):
     assert job.file_size == 8
     assert not source.exists()
     assert not source.parent.exists()
+
+
+def test_telegram_file_above_configured_limit_fails(tmp_path):
+    settings = Settings(telegram_token="test", download_dir=tmp_path, max_file_size=4)
+    manager = JobManager(settings)
+    source = tmp_path / "uploads" / "token" / "report.pdf"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"pdf-data")
+
+    job = new_job(
+        user_id=1,
+        chat_id=1,
+        source="report.pdf",
+        host="gofile",
+        source_kind="telegram_file",
+        local_path=source,
+    )
+    with pytest.raises(FileTooLarge, match="limit"):
+        manager._pipeline(job)
 
 
 def test_telegram_file_missing_on_disk_fails(tmp_path, monkeypatch):

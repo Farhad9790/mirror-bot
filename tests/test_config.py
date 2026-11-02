@@ -17,6 +17,13 @@ def test_load_settings(monkeypatch):
     assert settings.max_concurrent_jobs == 3
 
 
+def test_load_settings_zero_means_unlimited(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:abc")
+    monkeypatch.setenv("MAX_FILE_SIZE", "0")
+    settings = load_settings()
+    assert settings.max_file_size == 0
+
+
 def test_load_settings_falls_back_on_bad_values(monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:abc")
     monkeypatch.setenv("MAX_CONCURRENT_JOBS", "0")

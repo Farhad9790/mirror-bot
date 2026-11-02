@@ -46,7 +46,7 @@ def _env_ids(name: str) -> frozenset[int]:
 class Settings:
     telegram_token: str
     allowed_user_ids: frozenset[int] = field(default_factory=frozenset)
-    max_file_size: int = 8 * 1024**3
+    max_file_size: int = 0
     max_concurrent_jobs: int = 2
     job_timeout: int = 2 * 60 * 60
     run_seconds: int = 0
@@ -80,7 +80,7 @@ def load_settings() -> Settings:
     return Settings(
         telegram_token=token,
         allowed_user_ids=_env_ids("ALLOWED_USER_IDS"),
-        max_file_size=parse_size(os.getenv("MAX_FILE_SIZE"), 8 * 1024**3),
+        max_file_size=parse_size(os.getenv("MAX_FILE_SIZE"), 0),
         max_concurrent_jobs=max(1, _env_int("MAX_CONCURRENT_JOBS", 2)),
         job_timeout=max(60, _env_int("JOB_TIMEOUT", 2 * 60 * 60)),
         run_seconds=max(0, _env_int("BOT_RUN_SECONDS", 0)),

@@ -26,6 +26,7 @@ from .errors import (
 from .resolver import ResolvedLink, USER_AGENT
 from .utils import (
     CancelToken,
+    exceeds_limit,
     filename_from_headers,
     filename_from_url,
     human_size,
@@ -79,7 +80,7 @@ class Downloader:
         if link.parts:
             return self._download_parts(link, dest, progress)
 
-        if link.size and link.size > self.max_size:
+        if link.size and exceeds_limit(link.size, self.max_size):
             raise FileTooLarge(
                 f"The file is {human_size(link.size)}, above the {human_size(self.max_size)} limit."
             )
@@ -139,7 +140,7 @@ class Downloader:
             self._http(part, sub, part_progress)
 
         result = self._collect(dest)
-        if result.size > self.max_size:
+        if exceeds_limit(result.size, self.max_size):
             raise FileTooLarge(
                 f"The file is {human_size(result.size)}, above the {human_size(self.max_size)} limit."
             )
@@ -175,7 +176,7 @@ class Downloader:
 
         self._run_aria2(args, dest, progress, label="download")
         result = self._collect(dest)
-        if result.size > self.max_size:
+        if exceeds_limit(result.size, self.max_size):
             raise FileTooLarge(
                 f"The file is {human_size(result.size)}, above the {human_size(self.max_size)} limit."
             )
@@ -220,7 +221,7 @@ class Downloader:
         args.append(url)
         self._run_aria2(args, dest, progress, label="torrent")
         result = self._collect(dest)
-        if result.size > self.max_size:
+        if exceeds_limit(result.size, self.max_size):
             raise FileTooLarge(
                 f"The torrent's largest file is {human_size(result.size)}, above the "
                 f"{human_size(self.max_size)} limit."
@@ -269,7 +270,7 @@ class Downloader:
                 speed = match.group(4) or ""
 
                 total_bytes = parse_aria_size(total)
-                if total_bytes and total_bytes > self.max_size:
+                if total_bytes and exceeds_limit(total_bytes, self.max_size):
                     process.terminate()
                     raise FileTooLarge(
                         f"The file is {human_size(total_bytes)}, above the "
@@ -341,7 +342,7 @@ class Downloader:
                 total = int(response.headers.get("content-length", ""))
             except (TypeError, ValueError):
                 pass
-            if total and total > self.max_size:
+            if total and exceeds_limit(total, self.max_size):
                 raise FileTooLarge(
                     f"The file is {human_size(total)}, above the {human_size(self.max_size)} limit."
                 )
@@ -354,7 +355,7 @@ class Downloader:
                         continue
                     self.cancel.check()
                     downloaded += len(chunk)
-                    if downloaded > self.max_size:
+                    if exceeds_limit(downloaded, self.max_size):
                         raise FileTooLarge(
                             f"The file grew past the {human_size(self.max_size)} limit."
                         )
@@ -370,6 +371,9 @@ class Downloader:
         except requests.RequestException as exc:
             partial.unlink(missing_ok=True)
             raise DownloadError(f"Download failed: {exc}") from exc
+        except OSError as exc:
+            partial.unlink(missing_ok=True)
+            raise DownloadError(f"Could not write the download to disk: {exc}") from exc
         finally:
             response.close()
 
@@ -419,9 +423,10 @@ class Downloader:
             "concurrent_fragment_downloads": 4,
             "windowsfilenames": True,
             "overwrites": True,
-            "max_filesize": self.max_size,
             "progress_hooks": [hook],
         }
+        if self.max_size > 0:
+            options["max_filesize"] = self.max_size
         if self.settings.cookies_file and self.settings.cookies_file.exists():
             options["cookiefile"] = str(self.settings.cookies_file)
 
@@ -439,7 +444,7 @@ class Downloader:
             raise DownloadError(f"Video extractor failed: {message[:400]}") from exc
 
         result = self._collect(dest)
-        if result.size > self.max_size:
+        if exceeds_limit(result.size, self.max_size):
             raise FileTooLarge(
                 f"The video is {human_size(result.size)}, above the {human_size(self.max_size)} limit."
             )

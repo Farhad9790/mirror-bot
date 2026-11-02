@@ -109,6 +109,14 @@ def parse_size(value: str | int | None, default: int) -> int:
     return int(number * factor)
 
 
+def exceeds_limit(size: float, limit: int) -> bool:
+    """Return True only when a positive limit is configured and size exceeds it.
+
+    A limit of 0 (or less) means unlimited.
+    """
+    return limit > 0 and size > limit
+
+
 def sanitize_filename(name: str, fallback: str = "download.bin", max_length: int = 180) -> str:
     """Make a remote filename safe for Windows, Linux and Telegram."""
     name = unquote(name or "").strip()

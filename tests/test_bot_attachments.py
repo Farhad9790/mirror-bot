@@ -134,6 +134,7 @@ def make_context(tmp_path, args=None):
         telegram_token="token",
         allowed_user_ids=frozenset({1}),
         download_dir=tmp_path,
+        max_file_size=0,
     )
     return SimpleNamespace(
         application=SimpleNamespace(bot_data={"settings": settings}),

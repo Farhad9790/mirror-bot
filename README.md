@@ -63,7 +63,7 @@ Telegram link / .torrent / file
    | `ALLOWED_USER_IDS` | recommended | Comma-separated IDs, e.g. `123456789,987654321` |
    | `GOFILE_TOKEN` | optional | Uses your Gofile account for uploads and share-link downloads instead of guest tokens |
 
-   Optional repository **variables** (Settings → Secrets and variables → Actions → Variables): `MAX_FILE_SIZE` (`8G`), `MAX_CONCURRENT_JOBS` (`1`), `JOB_TIMEOUT` (`7200`), `MULTI_FILE_MODE` (`largest`), `YTDLP_FORMAT` (`bv*+ba/b`), `GOFILE_WT_SALT` (only needed if Gofile rotates its website-token salt), `AUTO_RESTART` (`true`; set to `false` to stop the automatic hand-off).
+   Optional repository **variables** (Settings → Secrets and variables → Actions → Variables): `MAX_FILE_SIZE` (`0`, unlimited), `MAX_CONCURRENT_JOBS` (`1`), `JOB_TIMEOUT` (`7200`), `MULTI_FILE_MODE` (`largest`), `YTDLP_FORMAT` (`bv*+ba/b`), `GOFILE_WT_SALT` (only needed if Gofile rotates its website-token salt), `AUTO_RESTART` (`true`; set to `false` to stop the automatic hand-off).
 
 5. **Enable Actions and run it.** Open the **Actions** tab → **Telegram Mirror Bot** → **Run workflow**. Leave `run_seconds` blank for the normal 4h45m run, or set a small value such as `60` for a short test. Wait for the job to start, then send your bot a link.
 
@@ -75,7 +75,7 @@ Telegram link / .torrent / file
 - **Only one poller at a time.** Telegram allows a single `getUpdates` consumer per bot token, so the workflow's concurrency group serializes runs. A single run can still process several uploads concurrently via `MAX_CONCURRENT_JOBS`.
 - **Cron is not exact.** GitHub can delay scheduled runs by several minutes.
 - **Private repos run out of minutes.** 2,000 minutes/month is roughly 33 hours; this bot needs ~720 hours/month. Use a public repo or a real host.
-- **Disk is limited.** The standard runner has about 14 GB of SSD. The default `MAX_FILE_SIZE=8G` and `MAX_CONCURRENT_JOBS=1` are chosen to fit. Lower them if you mirror many files.
+- **Disk is limited.** The standard runner has about 14 GB of SSD. The bot no longer imposes a file-size cap by default (`MAX_FILE_SIZE=0`), but a single file must still fit on the runner; the practical ceiling is roughly 12 GB. Gofile's own plan limits also apply: guest accounts allow 1 GB per file, free verified accounts 5 GB per file, and paid plans more. Set `MAX_FILE_SIZE` if you want a hard cap, and keep `MAX_CONCURRENT_JOBS=1` when mirroring large files.
 - **Scheduled workflows can be disabled after 60 days without repository activity.** This workflow commits `.state/telegram.json` after each run, which keeps the repository active and also resumes the Telegram update offset.
 - **State commits.** The workflow pushes a tiny state commit (`chore: update bot state [skip ci]`) when the Telegram offset changes, plus a weekly heartbeat so GitHub does not disable the schedule after 60 idle days. If `main` is protected, allow GitHub Actions to push, or change the workflow to use a cache instead.
 - **Actions logs are public in a public repo.** Do not print tokens; the bot does not log them.
@@ -137,7 +137,7 @@ The image includes aria2 and ffmpeg. Downloads and state live in `/data`.
 | `TELEGRAM_BOT_TOKEN` | — | BotFather token (required) |
 | `ALLOWED_USER_IDS` | empty | Comma-separated Telegram user IDs. Empty means anyone can use the bot. |
 | `GOFILE_TOKEN` | empty | Optional Gofile account token. Empty = guest uploads. |
-| `MAX_FILE_SIZE` | `8G` | Maximum downloaded file size |
+| `MAX_FILE_SIZE` | `0` | Maximum downloaded file size; `0` = no bot-side limit |
 | `MAX_CONCURRENT_JOBS` | `2` | Parallel jobs (`1` in the Actions workflow) |
 | `JOB_TIMEOUT` | `7200` | Per-job timeout in seconds |
 | `BOT_RUN_SECONDS` | `0` | Stop after N seconds; `0` = run until stopped |
@@ -189,7 +189,7 @@ The resolver is intentionally best-effort. Sites that build download links in Ja
 
 **"That page does not expose a direct file"** — the page needs a login, CAPTCHA, or JavaScript that the resolver cannot execute. Try the original file URL.
 
-**A file sent in Telegram is rejected as too large** — Telegram's cloud Bot API only lets bots download attachments up to 20 MB. Send a direct link to the file instead; the bot can then mirror files up to `MAX_FILE_SIZE`.
+**A file sent in Telegram is rejected as too large** — Telegram's cloud Bot API only lets bots download attachments up to 20 MB. Send a direct link to the file instead; the bot can then mirror it up to the disk and Gofile limits (or `MAX_FILE_SIZE` if you set one).
 
 **Gofile says the token is rejected** — remove `GOFILE_TOKEN` to use guest uploads, or create a fresh token from your Gofile profile.
 
@@ -207,7 +207,7 @@ The resolver is intentionally best-effort. Sites that build download links in Ja
 
 **The state push fails** — the repository's default branch is probably protected. Allow GitHub Actions to push, or replace the state step with `actions/cache` restore/save.
 
-**Disk full** — lower `MAX_FILE_SIZE` and keep `MAX_CONCURRENT_JOBS=1`. Each job deletes its temporary files when it finishes.
+**Disk full** — set `MAX_FILE_SIZE` to a value that fits the runner and keep `MAX_CONCURRENT_JOBS=1`. Each job deletes its temporary files when it finishes.
 
 ## Security and legal notes
 

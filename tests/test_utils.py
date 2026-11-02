@@ -7,6 +7,7 @@ import pytest
 from mirror.errors import InvalidUrl, JobCancelled, JobTimeout
 from mirror.utils import (
     CancelToken,
+    exceeds_limit,
     extract_url,
     filename_from_headers,
     human_size,
@@ -30,6 +31,13 @@ def test_parse_size():
     assert parse_size("1024", 1) == 1024
     assert parse_size("nonsense", 7) == 7
     assert parse_size(None, 9) == 9
+
+
+def test_exceeds_limit_treats_zero_as_unlimited():
+    assert not exceeds_limit(10**12, 0)
+    assert not exceeds_limit(10**12, -1)
+    assert not exceeds_limit(100, 100)
+    assert exceeds_limit(101, 100)
 
 
 def test_extract_url():
