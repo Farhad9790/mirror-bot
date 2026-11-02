@@ -203,7 +203,7 @@ The resolver is intentionally best-effort. Sites that build download links in Ja
 
 **The Actions run stops after 4h45m** — that is expected. The run queues its successor before exiting, so the bot normally comes back within a minute or two. The keep-alive workflow also checks every 30 minutes.
 
-**The bot is offline for more than 30 minutes** — open the Actions tab and check for failed runs. If the `Queue next run` step failed, the keep-alive workflow should start a new run within 30 minutes; you can also run the workflow manually. To stop automatic restarts, set the repository variable `AUTO_RESTART` to `false` and disable the workflow.
+**The bot is offline for more than 30 minutes** — open the Actions tab and check for failed runs. If the `Queue next run` step failed, the keep-alive workflow should start a new run within 30 minutes; you can also run the workflow manually. To stop automatic restarts, set the repository variable `AUTO_RESTART` to `false` (this stops both the hand-off and the keep-alive) and disable the workflow.
 
 **The state push fails** — the repository's default branch is probably protected. Allow GitHub Actions to push, or replace the state step with `actions/cache` restore/save.
 

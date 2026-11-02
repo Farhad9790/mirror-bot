@@ -20,6 +20,7 @@ jobs:
 
     steps:
       - name: Start the bot if no run is active or queued
+        if: vars.AUTO_RESTART != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
