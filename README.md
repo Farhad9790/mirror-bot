@@ -193,6 +193,8 @@ The resolver is intentionally best-effort. Sites that build download links in Ja
 
 **Gofile says the token is rejected** — remove `GOFILE_TOKEN` to use guest uploads, or create a fresh token from your Gofile profile.
 
+**Gofile is rate-limiting downloads (HTTP 429)** — the bot serializes Gofile downloads, retries 429/5xx responses with backoff, and reduces aria2 connections for Gofile. If it still fails, set `MAX_CONCURRENT_JOBS=1`, add `GOFILE_TOKEN` (signed-in accounts get better limits), or wait a few minutes.
+
 **A Gofile share link fails** — the bot reads share links with a temporary guest token, so no account is needed. Password-protected folders are not supported. If Gofile changes its website-token salt, set `GOFILE_WT_SALT` to the current value from `https://gofile.io/js/wt.obf.js`; the default is `12af056dacea0b`.
 
 **Torrents do not start** — install aria2c (`aria2c --version`) and make sure the workflow/Docker image includes it. A magnet with no seeders stops after 5 minutes (`--bt-stop-timeout=300`).

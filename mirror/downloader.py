@@ -7,11 +7,13 @@ import logging
 import re
 import shutil
 import subprocess
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
+from urllib.parse import urlparse
 
 import requests
 
@@ -44,6 +46,47 @@ READOUT_RE = re.compile(
     r"(?:\((\d+)%\))?(?:.*?\bDL:([\d.]+\s*[KMGT]?i?B))?",
     re.IGNORECASE,
 )
+
+RETRYABLE_HTTP_STATUS = frozenset({429, 500, 502, 503, 504})
+
+# Gofile rate-limits direct downloads per IP. Jobs run in parallel, so serialize
+# Gofile transfers instead of letting them trip 429 on each other.
+_GOFILE_DOWNLOAD_LOCK = threading.Semaphore(1)
+
+
+def _is_gofile_url(url: str) -> bool:
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return False
+    return host == "gofile.io" or host.endswith(".gofile.io")
+
+
+def _retry_delay(response: requests.Response, default: float) -> float:
+    """Honour Retry-After when the server sends one (seconds only)."""
+    value = response.headers.get("retry-after")
+    if value:
+        try:
+            return max(1.0, min(300.0, float(value)))
+        except (TypeError, ValueError):
+            pass
+    return default
+
+
+def _looks_like_rate_limit(message: str) -> bool:
+    text = message.lower()
+    return "429" in text or "too many requests" in text or "rate limit" in text
+
+
+def _wait(cancel: CancelToken, seconds: float) -> None:
+    """Sleep while remaining responsive to cancellation."""
+    deadline = time.monotonic() + max(0.0, seconds)
+    while True:
+        cancel.check()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(1.0, remaining))
 
 
 @dataclass(slots=True)
@@ -102,6 +145,23 @@ class Downloader:
 
     # -------------------------------------------------------------- HTTP/aria2
     def _http(self, link: ResolvedLink, dest: Path, progress: ProgressCB) -> DownloadResult:
+        if not _is_gofile_url(link.url):
+            return self._http_unlocked(link, dest, progress)
+
+        self._acquire_gofile_slot(progress)
+        try:
+            return self._http_unlocked(link, dest, progress)
+        finally:
+            _GOFILE_DOWNLOAD_LOCK.release()
+
+    def _acquire_gofile_slot(self, progress: ProgressCB) -> None:
+        if _GOFILE_DOWNLOAD_LOCK.acquire(blocking=False):
+            return
+        progress(None, "Waiting for another Gofile download to finish…")
+        while not _GOFILE_DOWNLOAD_LOCK.acquire(timeout=1):
+            self.cancel.check()
+
+    def _http_unlocked(self, link: ResolvedLink, dest: Path, progress: ProgressCB) -> DownloadResult:
         if shutil.which(self.settings.aria2c_path):
             return self._aria2_http(link, dest, progress)
         logger.warning("%s not found; falling back to the Python downloader", self.settings.aria2c_path)
@@ -148,6 +208,10 @@ class Downloader:
 
     def _aria2_http(self, link: ResolvedLink, dest: Path, progress: ProgressCB) -> DownloadResult:
         out_name = sanitize_filename(link.filename or filename_from_url(link.url), "download.bin")
+        gofile = _is_gofile_url(link.url)
+        # Gofile dislikes many parallel connections from one IP. Be gentle there,
+        # but keep full speed for other hosts.
+        connections = 4 if gofile else 16
         args = [
             "--dir", str(dest),
             "--out", out_name,
@@ -155,11 +219,12 @@ class Downloader:
             "--allow-overwrite=true",
             "--auto-file-renaming=false",
             "--file-allocation=none",
-            "--max-connection-per-server=16",
-            "--split=16",
+            f"--max-connection-per-server={connections}",
+            f"--split={connections}",
             "--min-split-size=1M",
-            "--max-tries=5",
-            "--retry-wait=5",
+            f"--max-tries={10 if gofile else 5}",
+            f"--retry-wait={15 if gofile else 5}",
+            "--retry-on-http-error=429,500,502,503,504",
             "--connect-timeout=30",
             "--timeout=60",
             "--summary-interval=3",
@@ -174,7 +239,23 @@ class Downloader:
                 args.append(f"--header={key}: {value}")
         args.append(link.url)
 
-        self._run_aria2(args, dest, progress, label="download")
+        attempts = 4 if gofile else 1
+        for attempt in range(1, attempts + 1):
+            try:
+                self._run_aria2(args, dest, progress, label="download")
+                break
+            except DownloadError as exc:
+                if not gofile or not _looks_like_rate_limit(str(exc)):
+                    raise
+                if attempt == attempts:
+                    raise DownloadError(
+                        "Gofile is rate-limiting downloads right now. Wait a few minutes "
+                        "and try again, or set MAX_CONCURRENT_JOBS=1."
+                    ) from exc
+                delay = 30 * attempt
+                progress(None, f"Gofile is rate-limiting downloads. Retrying in {delay}s…")
+                _wait(self.cancel, delay)
+
         result = self._collect(dest)
         if exceeds_limit(result.size, self.max_size):
             raise FileTooLarge(
@@ -306,6 +387,56 @@ class Downloader:
             message = " | ".join(details[-4:]) or "no details from aria2c"
             raise DownloadError(f"aria2c failed with exit code {code}: {message}")
 
+    def _open_download(
+        self, link: ResolvedLink, headers: dict[str, str], progress: ProgressCB
+    ) -> requests.Response:
+        attempts = 5
+        for attempt in range(1, attempts + 1):
+            self.cancel.check()
+            try:
+                response = requests.get(
+                    link.url,
+                    headers=headers,
+                    stream=True,
+                    allow_redirects=True,
+                    timeout=(30, 60),
+                )
+            except requests.RequestException as exc:
+                if attempt == attempts:
+                    raise DownloadError(f"Download failed: {exc}") from exc
+                delay = min(60, 5 * attempt)
+                progress(None, f"Network error; retrying in {delay}s…")
+                _wait(self.cancel, delay)
+                continue
+
+            if response.status_code not in RETRYABLE_HTTP_STATUS:
+                return response
+
+            if attempt == attempts:
+                response.close()
+                if response.status_code == 429:
+                    raise DownloadError(
+                        "Gofile is rate-limiting downloads right now. "
+                        "Wait a minute and try again."
+                        if _is_gofile_url(link.url)
+                        else "The server is rate-limiting downloads (HTTP 429). "
+                        "Wait a minute and try again."
+                    )
+                raise DownloadError(
+                    f"The server kept returning HTTP {response.status_code}. Try again later."
+                )
+
+            delay = _retry_delay(response, min(60, 5 * (2 ** (attempt - 1))))
+            response.close()
+            if response.status_code == 429 and _is_gofile_url(link.url):
+                message = "Gofile is rate-limiting downloads"
+            else:
+                message = f"The server returned HTTP {response.status_code}"
+            progress(None, f"{message}; retrying in {delay}s…")
+            _wait(self.cancel, delay)
+
+        raise DownloadError("Download failed after several attempts.")
+
     def _requests_download(self, link: ResolvedLink, dest: Path, progress: ProgressCB) -> DownloadResult:
         name = sanitize_filename(link.filename or filename_from_url(link.url), "download.bin")
         target = dest / name
@@ -316,16 +447,7 @@ class Downloader:
         if link.headers:
             headers.update(link.headers)
 
-        try:
-            response = requests.get(
-                link.url,
-                headers=headers,
-                stream=True,
-                allow_redirects=True,
-                timeout=(30, 60),
-            )
-        except requests.RequestException as exc:
-            raise DownloadError(f"Download failed: {exc}") from exc
+        response = self._open_download(link, headers, progress)
 
         try:
             response.raise_for_status()

@@ -3,7 +3,8 @@ from __future__ import annotations
 import responses
 
 from mirror.config import Settings
-from mirror.downloader import Downloader, DownloadResult
+from mirror.downloader import Downloader, DownloadResult, _is_gofile_url
+from mirror.errors import DownloadError
 from mirror.resolver import ResolvedLink
 from mirror.utils import CancelToken
 
@@ -166,6 +167,115 @@ def test_aria2_http_sends_auth_headers(tmp_path, monkeypatch):
         lambda percent, detail: None,
     )
     assert "--header=Authorization: Bearer guest-token" in captured["args"]
+
+
+def test_is_gofile_url():
+    assert _is_gofile_url("https://gofile.io/download/abc")
+    assert _is_gofile_url("https://store10.gofile.io/download/web/abc/file.zip")
+    assert not _is_gofile_url("https://example.com/gofile.io/file")
+    assert not _is_gofile_url("not a url")
+
+
+def test_aria2_http_uses_gofile_safe_settings(tmp_path, monkeypatch):
+    downloader = Downloader(make_settings(tmp_path), CancelToken())
+    captured = {}
+
+    def fake_run(args, dest, progress, *, label):
+        captured["args"] = args
+        (dest / "file.bin").write_bytes(b"x" * 10)
+
+    monkeypatch.setattr(downloader, "_run_aria2", fake_run)
+    downloader._aria2_http(
+        ResolvedLink(url="https://store10.gofile.io/file.bin", filename="file.bin"),
+        tmp_path,
+        lambda percent, detail: None,
+    )
+    assert "--split=4" in captured["args"]
+    assert "--max-connection-per-server=4" in captured["args"]
+    assert "--max-tries=10" in captured["args"]
+    assert "--retry-on-http-error=429,500,502,503,504" in captured["args"]
+
+
+def test_aria2_http_retries_gofile_429(tmp_path, monkeypatch):
+    downloader = Downloader(make_settings(tmp_path), CancelToken())
+    calls = []
+    waits = []
+
+    def fake_run(args, dest, progress, *, label):
+        calls.append(label)
+        if len(calls) == 1:
+            raise DownloadError("aria2c failed with exit code 22: status=429")
+        (dest / "file.bin").write_bytes(b"x" * 10)
+
+    monkeypatch.setattr(downloader, "_run_aria2", fake_run)
+    monkeypatch.setattr("mirror.downloader._wait", lambda cancel, seconds: waits.append(seconds))
+    result = downloader._aria2_http(
+        ResolvedLink(url="https://store10.gofile.io/file.bin", filename="file.bin"),
+        tmp_path,
+        lambda percent, detail: None,
+    )
+    assert len(calls) == 2
+    assert waits == [30]
+    assert result.size == 10
+
+
+def test_aria2_http_reports_gofile_rate_limit(tmp_path, monkeypatch):
+    downloader = Downloader(make_settings(tmp_path), CancelToken())
+
+    def fake_run(args, dest, progress, *, label):
+        raise DownloadError("aria2c failed with exit code 22: status=429")
+
+    monkeypatch.setattr(downloader, "_run_aria2", fake_run)
+    monkeypatch.setattr("mirror.downloader._wait", lambda cancel, seconds: None)
+    try:
+        downloader._aria2_http(
+            ResolvedLink(url="https://store10.gofile.io/file.bin", filename="file.bin"),
+            tmp_path,
+            lambda percent, detail: None,
+        )
+    except DownloadError as exc:
+        assert "rate-limiting" in str(exc)
+    else:
+        raise AssertionError("expected a rate-limit error")
+
+
+@responses.activate
+def test_requests_download_retries_429(tmp_path, monkeypatch):
+    responses.add(responses.GET, "https://store10.gofile.io/file.bin", status=429)
+    responses.add(responses.GET, "https://store10.gofile.io/file.bin", status=429)
+    responses.add(
+        responses.GET,
+        "https://store10.gofile.io/file.bin",
+        body=b"hello",
+        headers={"Content-Type": "application/octet-stream", "Content-Length": "5"},
+    )
+    monkeypatch.setattr("mirror.downloader._wait", lambda cancel, seconds: None)
+    downloader = Downloader(make_settings(tmp_path), CancelToken())
+    result = downloader._requests_download(
+        ResolvedLink(url="https://store10.gofile.io/file.bin", filename="file.bin"),
+        tmp_path,
+        lambda percent, detail: None,
+    )
+    assert result.path.read_bytes() == b"hello"
+    assert len(responses.calls) == 3
+
+
+@responses.activate
+def test_requests_download_reports_gofile_rate_limit(tmp_path, monkeypatch):
+    for _ in range(5):
+        responses.add(responses.GET, "https://store10.gofile.io/file.bin", status=429)
+    monkeypatch.setattr("mirror.downloader._wait", lambda cancel, seconds: None)
+    downloader = Downloader(make_settings(tmp_path), CancelToken())
+    try:
+        downloader._requests_download(
+            ResolvedLink(url="https://store10.gofile.io/file.bin", filename="file.bin"),
+            tmp_path,
+            lambda percent, detail: None,
+        )
+    except DownloadError as exc:
+        assert "rate-limiting" in str(exc)
+    else:
+        raise AssertionError("expected a rate-limit error")
 
 
 def test_download_parts_largest_mode(tmp_path, monkeypatch):
