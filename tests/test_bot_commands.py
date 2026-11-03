@@ -37,8 +37,12 @@ class FakeContext:
         self.args = args
 
 
-def run_command(monkeypatch, command: str, args: list[str]):
-    settings = Settings(telegram_token="token", allowed_user_ids=frozenset({1}))
+def run_command(monkeypatch, command: str, args: list[str], **settings_kwargs):
+    settings = Settings(
+        telegram_token="token",
+        allowed_user_ids=frozenset({1}),
+        **settings_kwargs,
+    )
     update = FakeUpdate()
     context = FakeContext(settings, args)
     started = []
@@ -47,7 +51,10 @@ def run_command(monkeypatch, command: str, args: list[str]):
         started.append(job)
 
     monkeypatch.setattr(bot, "_start_job", fake_start)
-    asyncio.run(bot._cmd_link(update, context, command=command))
+    if command == "px":
+        asyncio.run(bot.cmd_px(update, context))
+    else:
+        asyncio.run(bot._cmd_link(update, context, command=command))
     return update, started
 
 
@@ -73,3 +80,23 @@ def test_command_without_link_shows_usage(monkeypatch):
     assert not started
     assert update.effective_message.replies
     assert "/gf" in update.effective_message.replies[0]
+
+
+def test_px_starts_pixeldrain_job(monkeypatch):
+    update, started = run_command(
+        monkeypatch,
+        "px",
+        ["https://example.com/file.zip"],
+        pixeldrain_api_key="secret",
+    )
+    assert len(started) == 1
+    assert started[0].host == "pixeldrain"
+    assert started[0].source == "https://example.com/file.zip"
+    assert not update.effective_message.replies
+
+
+def test_px_requires_api_key(monkeypatch):
+    update, started = run_command(monkeypatch, "px", ["https://example.com/file.zip"])
+    assert not started
+    assert update.effective_message.replies
+    assert "PIXELDRAIN_API_KEY" in update.effective_message.replies[0]

@@ -1,6 +1,6 @@
 # Telegram Mirror Bot
 
-A Telegram bot that takes a link or a file, downloads it if needed, and re-uploads it to **Gofile**.
+A Telegram bot that takes a link or a file, downloads it if needed, and re-uploads it to **Gofile or Pixeldrain**.
 
 It handles direct file links, web pages where the file is hidden behind a "Download" button, video sites supported by yt-dlp, magnet links, `.torrent` files, and files sent directly in Telegram.
 
@@ -14,10 +14,10 @@ Telegram link / .torrent / file
    aria2c (HTTP / torrent)  or  yt-dlp (video sites)
           │
           ▼
-   Gofile guest/account upload
+   Gofile or Pixeldrain upload
           │
           ▼
-   Public Gofile link sent back in Telegram
+   Public link sent back in Telegram
 ```
 
 ## Features
@@ -27,9 +27,11 @@ Telegram link / .torrent / file
 - Special handling for Google Drive single files, Dropbox, Pixeldrain links, Gofile share links, MediaFire-style buttons, and GitHub releases.
 - Video sites through yt-dlp (YouTube, Vimeo, TikTok, X/Twitter, Reddit, etc.).
 - Magnet links and `.torrent` files through aria2c (DHT enabled, seeding disabled).
-- Files sent directly in Telegram — documents, photos, video, audio, voice notes, animations and stickers — are uploaded to Gofile. Telegram's cloud Bot API limits bot downloads to 20 MB per attachment.
+- Files sent directly in Telegram — documents, photos, video, audio, voice notes, animations and stickers — are uploaded to Gofile. Reply with `/px` to send them to Pixeldrain instead. Telegram's cloud Bot API limits bot downloads to 20 MB per attachment.
 - Gofile share links (`gofile.io/d/...`) resolve through Gofile's API using a temporary guest token. Folder links are supported; the bot downloads the largest file or every file in `MULTI_FILE_MODE=zip`.
 - Gofile guest uploads work with no account. An optional `GOFILE_TOKEN` uses your account.
+- Pixeldrain uploads (`/px`) use your Pixeldrain API key, with the free plan allowing 10 GB per file and Pro allowing 100 GB per file.
+- Pixeldrain file links (`pixeldrain.com/u/...`) are downloaded through Pixeldrain's API. When `PIXELDRAIN_API_KEY` is set, the bot authenticates the download so a Pro/Prepaid account uses its own transfer quota instead of the shared free per-IP quota.
 - Progress bars, cancel buttons, per-user job limits, size limits and timeouts.
 - Private mode with `ALLOWED_USER_IDS`.
 - Runs on GitHub Actions with automatic run hand-off, Docker, or any small VPS.
@@ -62,12 +64,13 @@ Telegram link / .torrent / file
    | `TELEGRAM_BOT_TOKEN` | yes | BotFather token |
    | `ALLOWED_USER_IDS` | recommended | Comma-separated IDs, e.g. `123456789,987654321` |
    | `GOFILE_TOKEN` | optional | Uses your Gofile account for uploads and share-link downloads instead of guest tokens |
+   | `PIXELDRAIN_API_KEY` | optional | Required for `/px` uploads. Also authenticates Pixeldrain downloads; a Pro/Prepaid key uses the account's own transfer quota. |
 
    Optional repository **variables** (Settings → Secrets and variables → Actions → Variables): `MAX_FILE_SIZE` (`0`, unlimited), `MAX_CONCURRENT_JOBS` (`1`), `JOB_TIMEOUT` (`7200`), `MULTI_FILE_MODE` (`largest`), `YTDLP_FORMAT` (`bv*+ba/b`), `GOFILE_WT_SALT` (only needed if Gofile rotates its website-token salt), `AUTO_RESTART` (`true`; set to `false` to stop the automatic hand-off).
 
 5. **Enable Actions and run it.** Open the **Actions** tab → **Telegram Mirror Bot** → **Run workflow**. Leave `run_seconds` blank for the normal 4h45m run, or set a small value such as `60` for a short test. Wait for the job to start, then send your bot a link.
 
-6. **Send a link or a file.** The bot downloads the file if needed, uploads it to Gofile, and replies with the public link.
+6. **Send a link or a file.** The bot downloads the file if needed, uploads it to the destination you chose, and replies with the public link.
 
 ### GitHub Actions limitations
 
@@ -137,6 +140,7 @@ The image includes aria2 and ffmpeg. Downloads and state live in `/data`.
 | `TELEGRAM_BOT_TOKEN` | — | BotFather token (required) |
 | `ALLOWED_USER_IDS` | empty | Comma-separated Telegram user IDs. Empty means anyone can use the bot. |
 | `GOFILE_TOKEN` | empty | Optional Gofile account token. Empty = guest uploads. |
+| `PIXELDRAIN_API_KEY` | empty | Pixeldrain API key. Required for `/px`; also used to authenticate Pixeldrain downloads. |
 | `MAX_FILE_SIZE` | `0` | Maximum downloaded file size; `0` = no bot-side limit |
 | `MAX_CONCURRENT_JOBS` | `2` | Parallel jobs (`1` in the Actions workflow) |
 | `JOB_TIMEOUT` | `7200` | Per-job timeout in seconds |
@@ -155,13 +159,14 @@ The image includes aria2 and ffmpeg. Downloads and state live in `/data`.
 | Command | Description |
 |---|---|
 | `/start`, `/help` | Usage |
-| `/gf <link>` | Upload a link, or reply to a file with `/gf` |
+| `/gf <link>` | Upload a link to Gofile, or reply to a file with `/gf` |
 | `/mirror <link>` | Same as `/gf` |
+| `/px <link>` | Upload a link to Pixeldrain, or reply to a file with `/px` (requires `PIXELDRAIN_API_KEY`) |
 | `/status` | Active jobs |
 | `/cancel` | Cancel your active jobs |
 | `/id` | Show your Telegram user/chat ID |
 
-You can also send a link, a magnet link, a `.torrent` file, or any file directly. Files sent in Telegram are uploaded to Gofile; cloud bots can download attachments up to 20 MB. To mirror a file you already sent, reply to it with `/gf` or `/mirror`.
+You can also send a link, a magnet link, a `.torrent` file, or any file directly. Files sent in Telegram are uploaded to Gofile; cloud bots can download attachments up to 20 MB. To mirror a file you already sent, reply to it with `/gf`, `/mirror`, or `/px`.
 
 ## Supported links
 
@@ -173,7 +178,7 @@ You can also send a link, a magnet link, a `.torrent` file, or any file directly
 | GitHub releases | ✅ GitHub API picks the first asset |
 | Google Drive single files | ✅ converted to a direct download URL |
 | Dropbox share links | ✅ `dl=1` |
-| Pixeldrain file links (download only) | ✅ direct API URL |
+| Pixeldrain file links (`pixeldrain.com/u/...`) | ✅ direct API URL, authenticated when `PIXELDRAIN_API_KEY` is set |
 | Gofile share links (`gofile.io/d/...`) | ✅ Gofile API, guest token, folders supported |
 | MediaFire / SourceForge / similar pages | ✅ when the download link is in the HTML |
 | YouTube, Vimeo, TikTok, X, Reddit, etc. | ✅ yt-dlp |
@@ -185,6 +190,8 @@ You can also send a link, a magnet link, a `.torrent` file, or any file directly
 
 The resolver is intentionally best-effort. Sites that build download links in JavaScript after a login or CAPTCHA cannot be mirrored without site-specific code.
 
+Pixeldrain's free plan allows uploads up to 10 GB per file and roughly 6 GB of downloads per IP per day. Free download limits are tracked per IP, so a free API key does not raise them. A Pixeldrain Pro or Prepaid account has an account-bound transfer quota and also allows direct/hotlinked downloads; `PIXELDRAIN_API_KEY` lets the bot use that quota. The bot does not bypass Pixeldrain's limits or CAPTCHA — use a paid plan if you need more.
+
 ## Troubleshooting
 
 **"That page does not expose a direct file"** — the page needs a login, CAPTCHA, or JavaScript that the resolver cannot execute. Try the original file URL.
@@ -194,6 +201,12 @@ The resolver is intentionally best-effort. Sites that build download links in Ja
 **Gofile says the token is rejected** — remove `GOFILE_TOKEN` to use guest uploads, or create a fresh token from your Gofile profile.
 
 **Gofile is rate-limiting downloads (HTTP 429)** — the bot serializes Gofile downloads, retries 429/5xx responses with backoff, and reduces aria2 connections for Gofile. If it still fails, set `MAX_CONCURRENT_JOBS=1`, add `GOFILE_TOKEN` (signed-in accounts get better limits), or wait a few minutes.
+
+**Pixeldrain says `hotlink_detected`, `download_limit_exceeded`, or `ip_download_limited_captcha_required`** — Pixeldrain's free download quota is per IP and cannot be raised by a free API key. A Pro or Prepaid account has an account-bound quota and allows hotlinked downloads; add its API key as `PIXELDRAIN_API_KEY`. The bot does not bypass this limit or solve CAPTCHAs.
+
+**Pixeldrain rejects the API key (`authentication_failed`)** — create a fresh key at `https://pixeldrain.com/user/api_keys` and update the `PIXELDRAIN_API_KEY` secret. Keys are only used on `pixeldrain.com` hosts.
+
+**`/px` says `PIXELDRAIN_API_KEY` is not set** — `/gf` and `/mirror` still work with Gofile. Add the Pixeldrain key as a repository secret to enable `/px`.
 
 **A Gofile share link fails** — the bot reads share links with a temporary guest token, so no account is needed. Password-protected folders are not supported. If Gofile changes its website-token salt, set `GOFILE_WT_SALT` to the current value from `https://gofile.io/js/wt.obf.js`; the default is `12af056dacea0b`.
 
@@ -216,8 +229,9 @@ The resolver is intentionally best-effort. Sites that build download links in Ja
 - Set `ALLOWED_USER_IDS`. An open bot lets anyone use your runner, API keys and bandwidth.
 - The bot blocks localhost/private-network URLs to reduce SSRF risk, but do not expose it to untrusted users.
 - Never commit `.env` or tokens. The GitHub Actions secrets are the right place.
-- Only mirror content you have the right to copy. Respect the terms of service of the source site and Gofile.
+- Only mirror content you have the right to copy. Respect the terms of service of the source site, Gofile, and Pixeldrain.
 - Gofile guest uploads create a new public folder per upload. Use `GOFILE_TOKEN` if you want uploads tied to your account.
+- The Pixeldrain API key is used for `/px` uploads and authenticated Pixeldrain downloads. It is sent only to `pixeldrain.com` hosts. The bot does not bypass Pixeldrain's limits, hotlink protection, or CAPTCHA; those require a paid Pixeldrain plan or the site's normal download flow.
 
 ## Tests
 
@@ -226,7 +240,7 @@ pip install -r requirements.txt -r requirements-dev.txt
 pytest -q
 ```
 
-The tests cover URL/filename handling, the HTML download-button resolver, Gofile share-link resolution and the Gofile uploader with mocked HTTP responses, command parsing, and the downloader's header and file-collection logic.
+The tests cover URL/filename handling, the HTML download-button resolver, Gofile and Pixeldrain resolution and uploads with mocked HTTP responses, command parsing, and the downloader's header and file-collection logic.
 
 ## Project layout
 
@@ -240,6 +254,7 @@ mirror/
   state.py                 Telegram update offset persistence
   uploaders/
     gofile.py              Gofile upload fleet API
+    pixeldrain.py          Pixeldrain raw PUT uploader
 .github/workflows/
   bot.yml                  Scheduled bot run on GitHub Actions
   tests.yml                Unit tests

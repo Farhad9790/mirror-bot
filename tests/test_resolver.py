@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 
 import pytest
@@ -153,6 +154,95 @@ def test_special_urls():
 
     with pytest.raises(ResolutionError):
         resolver._special_url("https://mega.nz/file/abc#key")
+
+
+def test_pixeldrain_auth_only_applies_to_pixeldrain():
+    resolver = Resolver(allow_private_urls=True, pixeldrain_api_key="secret")
+    expected = "Basic " + base64.b64encode(b":secret").decode("ascii")
+    assert resolver._pixeldrain_auth("https://pixeldrain.com/u/abcd1234") == {
+        "Authorization": expected
+    }
+    assert resolver._pixeldrain_auth("https://cdn.pixeldrain.com/file") == {
+        "Authorization": expected
+    }
+    assert resolver._pixeldrain_auth("https://example.com/file") == {}
+    assert Resolver(allow_private_urls=True)._pixeldrain_auth(
+        "https://pixeldrain.com/u/abcd1234"
+    ) == {}
+
+
+def test_resolve_pixeldrain_uses_api_key():
+    response = FakeResponse(
+        url="https://pixeldrain.com/api/file/abcd1234?download",
+        headers={
+            "content-type": "application/zip",
+            "content-length": "1234",
+            "content-disposition": 'attachment; filename="archive.zip"',
+        },
+    )
+    session = FakeSession(get=response)
+    resolver = Resolver(
+        allow_private_urls=True,
+        pixeldrain_api_key="secret",
+        session=session,
+    )
+    link = resolver.resolve("https://pixeldrain.com/u/abcd1234")
+
+    expected = {
+        "Authorization": "Basic " + base64.b64encode(b":secret").decode("ascii")
+    }
+    assert session.get_calls == ["https://pixeldrain.com/api/file/abcd1234?download"]
+    assert session.last_headers == expected
+    assert link.headers == expected
+    assert link.filename == "archive.zip"
+    assert link.size == 1234
+
+
+def test_resolve_pixeldrain_without_key_is_anonymous():
+    response = FakeResponse(
+        url="https://pixeldrain.com/api/file/abcd1234?download",
+        headers={"content-type": "application/zip", "content-length": "1234"},
+    )
+    session = FakeSession(get=response)
+    resolver = Resolver(allow_private_urls=True, session=session)
+    link = resolver.resolve("https://pixeldrain.com/u/abcd1234")
+
+    assert session.last_headers is None
+    assert link.headers is None
+
+
+def test_resolve_pixeldrain_does_not_leak_key_to_other_hosts():
+    response = FakeResponse(
+        url="https://cdn.example.com/archive.zip",
+        headers={"content-type": "application/zip", "content-length": "1234"},
+    )
+    session = FakeSession(get=response)
+    resolver = Resolver(
+        allow_private_urls=True,
+        pixeldrain_api_key="secret",
+        session=session,
+    )
+    link = resolver.resolve("https://example.com/archive.zip")
+
+    assert session.last_headers is None
+    assert link.headers is None
+
+
+def test_resolve_pixeldrain_hotlink_error():
+    response = FakeResponse(
+        status_code=403,
+        url="https://pixeldrain.com/api/file/abcd1234?download",
+        body=json.dumps(
+            {"success": False, "value": "hotlink_detected", "message": "blocked"}
+        ).encode("utf-8"),
+    )
+    resolver = Resolver(
+        allow_private_urls=True,
+        pixeldrain_api_key="secret",
+        session=FakeSession(get=response),
+    )
+    with pytest.raises(NoFallbackResolutionError, match="hotlink"):
+        resolver.resolve("https://pixeldrain.com/u/abcd1234")
 
 
 def test_resolve_html_file_served_as_attachment():

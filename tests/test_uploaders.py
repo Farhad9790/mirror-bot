@@ -4,6 +4,7 @@ import pytest
 
 from mirror.errors import UploadError
 from mirror.uploaders.gofile import GofileUploader
+from mirror.uploaders.pixeldrain import PixeldrainUploader
 from mirror.utils import CancelToken
 
 
@@ -26,11 +27,23 @@ class FakeSession:
         self.response = response
         self.last_url: str | None = None
         self.last_headers: dict | None = None
+        self.last_auth = None
         self.last_data = None
 
     def post(self, url, data=None, headers=None, timeout=None):
         self.last_url = url
         self.last_headers = headers
+        self.last_data = data
+        while True:
+            chunk = data.read(64 * 1024)
+            if not chunk:
+                break
+        return self.response
+
+    def put(self, url, data=None, headers=None, auth=None, timeout=None):
+        self.last_url = url
+        self.last_headers = headers
+        self.last_auth = auth
         self.last_data = data
         while True:
             chunk = data.read(64 * 1024)
@@ -84,5 +97,48 @@ def test_gofile_rejects_bad_token(tmp_path):
     session = FakeSession(FakeResponse(401, text="unauthorized"))
     with pytest.raises(UploadError):
         GofileUploader(token="bad", session=session).upload(
+            source, lambda percent, detail: None, CancelToken()
+        )
+
+
+def test_pixeldrain_requires_api_key():
+    usable, reason = PixeldrainUploader().available()
+    assert not usable
+    assert "PIXELDRAIN_API_KEY" in reason
+
+
+def test_pixeldrain_upload(tmp_path):
+    source = tmp_path / "hello world.txt"
+    source.write_text("hello")
+    response = FakeResponse(200, {"success": True, "id": "abc123"})
+    session = FakeSession(response)
+    uploader = PixeldrainUploader("secret", session=session)
+    assert uploader.available() == (True, "")
+
+    result = uploader.upload(source, lambda percent, detail: None, CancelToken())
+
+    assert result.url == "https://pixeldrain.com/u/abc123"
+    assert result.host == "Pixeldrain"
+    assert session.last_url == "https://pixeldrain.com/api/file/hello%20world.txt"
+    assert session.last_auth == ("", "secret")
+    assert session.last_headers["Content-Length"] == "5"
+
+
+def test_pixeldrain_rejects_bad_key(tmp_path):
+    source = tmp_path / "hello.txt"
+    source.write_text("hello")
+    session = FakeSession(FakeResponse(401, text="unauthorized"))
+    with pytest.raises(UploadError, match="API key"):
+        PixeldrainUploader("bad", session=session).upload(
+            source, lambda percent, detail: None, CancelToken()
+        )
+
+
+def test_pixeldrain_rejects_too_large_file(tmp_path):
+    source = tmp_path / "hello.txt"
+    source.write_text("hello")
+    session = FakeSession(FakeResponse(413, text="file too large"))
+    with pytest.raises(UploadError, match="10 GB"):
+        PixeldrainUploader("secret", session=session).upload(
             source, lambda percent, detail: None, CancelToken()
         )

@@ -53,6 +53,7 @@ class Settings:
     download_dir: Path = Path("downloads")
     state_file: Path = Path(".state/telegram.json")
     gofile_token: str | None = None
+    pixeldrain_api_key: str | None = None
     cookies_file: Path | None = None
     multi_file_mode: str = "largest"
     ytdlp_format: str = "bv*+ba/b"
@@ -87,6 +88,7 @@ def load_settings() -> Settings:
         download_dir=download_dir,
         state_file=state_file,
         gofile_token=os.getenv("GOFILE_TOKEN", "").strip() or None,
+        pixeldrain_api_key=os.getenv("PIXELDRAIN_API_KEY", "").strip() or None,
         cookies_file=Path(cookies).expanduser() if cookies else None,
         multi_file_mode=multi_file_mode,
         ytdlp_format=os.getenv("YTDLP_FORMAT", "bv*+ba/b").strip() or "bv*+ba/b",

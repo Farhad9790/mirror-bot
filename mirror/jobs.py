@@ -195,6 +195,7 @@ class JobManager:
                     resolver = Resolver(
                         allow_private_urls=self.settings.allow_private_urls,
                         gofile_token=self.settings.gofile_token,
+                        pixeldrain_api_key=self.settings.pixeldrain_api_key,
                     )
                     try:
                         link = resolver.resolve(job.source)

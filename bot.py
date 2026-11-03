@@ -347,6 +347,7 @@ async def _submit_job(
     source_kind: str = "url",
     local_path: Optional[Path] = None,
     status_message: Optional[Message] = None,
+    host: str = "gofile",
 ) -> None:
     settings: Settings = context.application.bot_data["settings"]
     message = update.effective_message
@@ -365,7 +366,7 @@ async def _submit_job(
         await reject("The bot is finishing its current run. Send the file again in a few minutes.")
         return
 
-    usable, reason = get_uploader("gofile", settings).available()
+    usable, reason = get_uploader(host, settings).available()
     if not usable:
         await reject(f"⚠️ {html.escape(reason)}")
         return
@@ -374,7 +375,7 @@ async def _submit_job(
         user_id=update.effective_user.id,
         chat_id=update.effective_chat.id,
         source=source,
-        host="gofile",
+        host=host,
         source_kind=source_kind,
         local_path=local_path,
     )
@@ -390,15 +391,17 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(
         "<b>Mirror bot</b>\n\n"
         "Send me a link, a magnet link, a <code>.torrent</code> file, or any file. "
-        "I download it and upload it to Gofile, then reply with the public link.\n\n"
+        "I download it and upload it to Gofile or Pixeldrain, then reply with the public link.\n\n"
         "Files sent directly in Telegram are uploaded too. Telegram bots can "
         "download attachments up to 20 MB; send a link for anything larger. "
-        "You can also reply to a file with /gf.\n\n"
+        "You can also reply to a file with /gf or /px.\n\n"
         "Any file type, Gofile share links, pages with a download button, and "
         "video sites are supported.\n\n"
         "<b>Commands</b>\n"
-        "/gf &lt;link&gt; — upload a link, or reply to a file with /gf\n"
+        "/gf &lt;link&gt; — upload to Gofile, or reply to a file with /gf\n"
         "/mirror &lt;link&gt; — same as /gf\n"
+        "/px &lt;link&gt; — upload to Pixeldrain, or reply to a file with /px "
+        "(requires PIXELDRAIN_API_KEY)\n"
         "/status — active jobs\n"
         "/cancel — cancel your jobs\n"
         "/id — show your Telegram ID",
@@ -427,6 +430,7 @@ async def _cmd_link(
     context: ContextTypes.DEFAULT_TYPE,
     *,
     command: str,
+    host: str = "gofile",
 ) -> None:
     settings: Settings = context.application.bot_data["settings"]
     if not _authorized(update, settings):
@@ -444,7 +448,7 @@ async def _cmd_link(
     if not source and replied is not None:
         attachment = _message_attachment(replied)
         if attachment is not None:
-            await _mirror_attachment(update, context, replied, attachment)
+            await _mirror_attachment(update, context, replied, attachment, host=host)
             return
         if replied.text:
             source = extract_url(replied.text)
@@ -457,7 +461,7 @@ async def _cmd_link(
         )
         return
 
-    await _submit_job(update, context, source=source)
+    await _submit_job(update, context, source=source, host=host)
 
 
 async def cmd_mirror(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -466,6 +470,10 @@ async def cmd_mirror(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def cmd_gf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _cmd_link(update, context, command="gf")
+
+
+async def cmd_px(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _cmd_link(update, context, command="px", host="pixeldrain")
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -528,8 +536,10 @@ async def _mirror_attachment(
     context: ContextTypes.DEFAULT_TYPE,
     attachment_message: Message,
     attachment,
+    *,
+    host: str = "gofile",
 ) -> None:
-    """Download a Telegram attachment and submit it as a Gofile job."""
+    """Download a Telegram attachment and submit it as an upload job."""
     settings: Settings = context.application.bot_data["settings"]
     message = update.effective_message
     if message is None:
@@ -566,6 +576,7 @@ async def _mirror_attachment(
                 source_kind="torrent_file",
                 local_path=path,
                 status_message=status,
+                host=host,
             )
             return
 
@@ -598,6 +609,7 @@ async def _mirror_attachment(
         source_kind="telegram_file",
         local_path=path,
         status_message=status,
+        host=host,
     )
 
 
@@ -668,6 +680,7 @@ async def post_init(app: Application) -> None:
                 BotCommand("start", "Welcome and usage"),
                 BotCommand("gf", "Upload to Gofile: /gf <link>"),
                 BotCommand("mirror", "Upload to Gofile: /mirror <link>"),
+                BotCommand("px", "Upload to Pixeldrain: /px <link>"),
                 BotCommand("status", "Show active jobs"),
                 BotCommand("cancel", "Cancel your jobs"),
                 BotCommand("id", "Show your Telegram ID"),
@@ -689,6 +702,7 @@ def _register(app: Application, settings: Settings, manager: JobManager) -> None
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("gf", cmd_gf))
     app.add_handler(CommandHandler("mirror", cmd_mirror))
+    app.add_handler(CommandHandler("px", cmd_px))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
     app.add_handler(CommandHandler("id", cmd_id))
@@ -735,9 +749,10 @@ async def run_bot(settings: Settings) -> None:
         drop_pending_updates=False,
     )
     logger.info(
-        "Bot polling started (run_seconds=%s, max_file_size=%s, uploader=Gofile)",
+        "Bot polling started (run_seconds=%s, max_file_size=%s, uploaders=Gofile%s)",
         settings.run_seconds or "unlimited",
         human_size(settings.max_file_size) if settings.max_file_size > 0 else "unlimited",
+        ",Pixeldrain" if settings.pixeldrain_api_key else "",
     )
 
     stop_event = asyncio.Event()

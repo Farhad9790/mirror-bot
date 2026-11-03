@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import html as html_lib
 import json
@@ -39,6 +40,47 @@ GOFILE_LANG = "en-US"
 # Salt baked into Gofile's /js/wt.obf.js. It can be overridden if Gofile rotates it.
 GOFILE_WT_SALT = os.getenv("GOFILE_WT_SALT", "12af056dacea0b").strip() or "12af056dacea0b"
 GOFILE_TOKEN_TTL = 6 * 60 * 60
+
+PIXELDRAIN_ERROR_MESSAGES = {
+    "authentication_failed": (
+        "Pixeldrain rejected the API key. Check PIXELDRAIN_API_KEY."
+    ),
+    "authentication_required": (
+        "Pixeldrain requires an API key for this download. Set PIXELDRAIN_API_KEY."
+    ),
+    "hotlink_detected": (
+        "Pixeldrain blocked the direct download with hotlink protection. "
+        "A Pro account API key allows hotlinking."
+    ),
+    "file_rate_limited_captcha_required": (
+        "Pixeldrain wants a CAPTCHA before this direct download. "
+        "Try again later or use a Pro account API key."
+    ),
+    "ip_download_limited_captcha_required": (
+        "Pixeldrain's free download limit was reached for this IP. "
+        "A Pro account's API key uses the account's own transfer quota."
+    ),
+    "download_limit_exceeded": (
+        "Pixeldrain's free download limit was reached for this IP. "
+        "A Pro account's API key uses the account's own transfer quota."
+    ),
+    "transfer_limit_exceeded": (
+        "Pixeldrain's transfer limit was reached. "
+        "A Pro account's API key uses the account's own transfer quota."
+    ),
+    "max_concurrent_downloads": (
+        "Pixeldrain allows only one download connection for free accounts. "
+        "Wait for the other download to finish or use a Pro account."
+    ),
+    "server_overload_captcha_required": (
+        "Pixeldrain is overloaded and asks free users to solve a CAPTCHA. "
+        "Try again later or use a Pro account."
+    ),
+    "not_found": "That Pixeldrain file does not exist or has expired.",
+    "unavailable_for_legal_reasons": (
+        "Pixeldrain removed that file for legal reasons."
+    ),
+}
 
 _gofile_token_lock = threading.Lock()
 _gofile_token: Optional[tuple[str, float]] = None
@@ -113,12 +155,14 @@ class Resolver:
         max_html_bytes: int = 3_000_000,
         allow_private_urls: bool = False,
         gofile_token: Optional[str] = None,
+        pixeldrain_api_key: Optional[str] = None,
         session: Optional[requests.Session] = None,
     ) -> None:
         self.timeout = timeout
         self.max_html_bytes = max_html_bytes
         self.allow_private_urls = allow_private_urls
         self.gofile_token = (gofile_token or "").strip() or None
+        self.pixeldrain_api_key = (pixeldrain_api_key or "").strip() or None
         self.session = session or requests.Session()
         self.session.headers.update(
             {
@@ -143,6 +187,7 @@ class Resolver:
 
         url = self._special_url(url)
         host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+        is_pixeldrain = _is_pixeldrain_url(url)
         if VIDEO_SITE.search(host):
             return ResolvedLink(url=url, kind="ytdlp", filename=None)
 
@@ -155,6 +200,7 @@ class Resolver:
                 stream=True,
                 allow_redirects=True,
                 timeout=self.timeout,
+                headers=self._pixeldrain_auth(url) or None,
             )
         except requests.RequestException as exc:
             raise ResolutionError(f"Could not open that link: {exc}") from exc
@@ -162,6 +208,8 @@ class Resolver:
         try:
             status = response.status_code
             if status >= 400:
+                if is_pixeldrain:
+                    raise NoFallbackResolutionError(_pixeldrain_error_message(response, status))
                 raise ResolutionError(f"The server returned HTTP {status} for that link.")
 
             content_type = (response.headers.get("content-type") or "").split(";")[0].strip().lower()
@@ -189,6 +237,7 @@ class Resolver:
                     content_type=content_type,
                     size=size,
                     kind="torrent",
+                    headers=self._pixeldrain_auth(final_url) or None,
                 )
 
             if content_type in HTML_TYPES and not is_attachment:
@@ -228,6 +277,7 @@ class Resolver:
                 size=size,
                 kind="http",
                 force_download=is_attachment,
+                headers=self._pixeldrain_auth(final_url) or None,
             )
         finally:
             response.close()
@@ -295,6 +345,19 @@ class Resolver:
             return urlunparse(parsed)
 
         return url
+
+    def _pixeldrain_auth(self, url: str) -> dict[str, str]:
+        """Pixeldrain API authentication, only for Pixeldrain hosts.
+
+        The API key is scoped to the request so it is never sent to unrelated
+        hosts that the resolver or downloader may contact.
+        """
+        if not self.pixeldrain_api_key or not _is_pixeldrain_url(url):
+            return {}
+        token = base64.b64encode(
+            f":{self.pixeldrain_api_key}".encode("utf-8")
+        ).decode("ascii")
+        return {"Authorization": f"Basic {token}"}
 
     # ------------------------------------------------------------------ Gofile
     def _resolve_gofile(self, code: str) -> ResolvedLink:
@@ -529,7 +592,7 @@ class Resolver:
         )
 
     def _probe(self, url: str, referer: str) -> _Probe:
-        headers = {"Referer": referer}
+        headers = {"Referer": referer, **self._pixeldrain_auth(url)}
         try:
             response = self.session.head(
                 url,
@@ -575,6 +638,7 @@ class Resolver:
                             content_type=content_type,
                             size=_content_length(response.headers),
                             kind="torrent",
+                            headers=self._pixeldrain_auth(final_url) or None,
                         )
                     )
                 return _Probe(
@@ -586,6 +650,7 @@ class Resolver:
                         size=_content_length(response.headers),
                         kind="http",
                         force_download=is_attachment,
+                        headers=self._pixeldrain_auth(final_url) or None,
                     )
                 )
             finally:
@@ -710,6 +775,37 @@ class Resolver:
             reverse=True,
         )
         return [(score, link) for link, score in candidates], title
+
+
+def _is_pixeldrain_url(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+    return host == "pixeldrain.com" or host.endswith(".pixeldrain.com")
+
+
+def _pixeldrain_error_message(response: requests.Response, status: int) -> str:
+    code = ""
+    try:
+        payload = json.loads(_read_limited(response, 64 * 1024).decode("utf-8", "replace"))
+        if isinstance(payload, dict):
+            code = str(payload.get("value") or "")
+    except (requests.RequestException, ValueError, TypeError):
+        pass
+
+    message = PIXELDRAIN_ERROR_MESSAGES.get(code)
+    if message:
+        return message
+    if status == 401:
+        return "Pixeldrain rejected the API key. Check PIXELDRAIN_API_KEY."
+    if status == 403:
+        return (
+            "Pixeldrain refused the download (HTTP 403). The file may need "
+            "a Pro account or a CAPTCHA."
+        )
+    if status == 404:
+        return "That Pixeldrain file does not exist or has expired."
+    if status == 429:
+        return "Pixeldrain is rate-limiting requests. Try again later."
+    return f"Pixeldrain returned HTTP {status} for that link."
 
 
 def _gofile_code(url: str) -> Optional[str]:

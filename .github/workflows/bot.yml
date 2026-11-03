@@ -29,6 +29,7 @@ jobs:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       ALLOWED_USER_IDS: ${{ secrets.ALLOWED_USER_IDS }}
       GOFILE_TOKEN: ${{ secrets.GOFILE_TOKEN }}
+      PIXELDRAIN_API_KEY: ${{ secrets.PIXELDRAIN_API_KEY }}
       GOFILE_WT_SALT: ${{ vars.GOFILE_WT_SALT || '12af056dacea0b' }}
       MAX_FILE_SIZE: ${{ vars.MAX_FILE_SIZE || '0' }}
       MAX_CONCURRENT_JOBS: ${{ vars.MAX_CONCURRENT_JOBS || '1' }}
