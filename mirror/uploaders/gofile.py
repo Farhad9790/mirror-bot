@@ -16,7 +16,7 @@ from .base import ProgressCB, Uploader, UploadResult
 
 logger = logging.getLogger(__name__)
 
-UPLOAD_URL = "https://upload.gofile.io/uploadfile"
+UPLOAD_URL = "https://upload.gofile.is/uploadfile"
 
 
 class _Retryable(Exception):

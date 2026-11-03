@@ -66,7 +66,7 @@ def test_gofile_guest_upload(tmp_path):
     uploader = GofileUploader(session=session)
     result = uploader.upload(source, lambda percent, detail: None, CancelToken())
     assert result.url == "https://gofile.io/d/abc123"
-    assert session.last_url == "https://upload.gofile.io/uploadfile"
+    assert session.last_url == "https://upload.gofile.is/uploadfile"
     assert "Authorization" not in session.last_headers
 
 
