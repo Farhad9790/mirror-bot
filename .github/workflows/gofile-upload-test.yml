@@ -1,0 +1,21 @@
+name: Gofile Upload Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Upload a test file to both Gofile endpoints
+        run: |
+          set -e
+          head -c 10485760 /dev/urandom > /tmp/test.bin
+          for url in https://upload.gofile.is/uploadfile https://upload.gofile.io/uploadfile; do
+            echo "=== $url ==="
+            code=$(curl -sS -o /tmp/out.json -w "%{http_code}" -X POST "$url" -F "file=@/tmp/test.bin")
+            echo "HTTP $code"
+            head -c 600 /tmp/out.json || true
+            echo
+          done
