@@ -152,8 +152,7 @@ class JobManager:
                 logger.warning("Job %s timed out", job.id)
             except MirrorError as exc:
                 job.update(status="failed", stage="failed", error=str(exc))
-                logger.warning("Job %s failed (%s)", job.id, type(exc).__name__)
-                logger.debug("Job %s error detail: %s", job.id, exc)
+                logger.warning("Job %s failed (%s): %s", job.id, type(exc).__name__, exc)
             except Exception:
                 logger.exception("Job %s crashed", job.id)
                 job.update(
