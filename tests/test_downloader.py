@@ -3,7 +3,12 @@ from __future__ import annotations
 import responses
 
 from mirror.config import Settings
-from mirror.downloader import Downloader, DownloadResult, _is_gofile_url
+from mirror.downloader import (
+    Downloader,
+    DownloadResult,
+    _is_gofile_url,
+    _looks_like_rate_limit,
+)
 from mirror.errors import DownloadError
 from mirror.resolver import ResolvedLink
 from mirror.utils import CancelToken
@@ -176,6 +181,16 @@ def test_is_gofile_url():
     assert not _is_gofile_url("not a url")
 
 
+def test_rate_limit_detection():
+    assert _looks_like_rate_limit("aria2c failed: status=429")
+    assert _looks_like_rate_limit("The response status is not successful. status=429")
+    assert _looks_like_rate_limit("Gofile is rate-limiting downloads")
+    assert not _looks_like_rate_limit(
+        "aria2c: unrecognized option '--retry-on-http-error=429,500,502,503,504'"
+    )
+    assert not _looks_like_rate_limit("aria2c failed with exit code 1: time out")
+
+
 def test_aria2_http_uses_gofile_safe_settings(tmp_path, monkeypatch):
     downloader = Downloader(make_settings(tmp_path), CancelToken())
     captured = {}
@@ -193,7 +208,10 @@ def test_aria2_http_uses_gofile_safe_settings(tmp_path, monkeypatch):
     assert "--split=4" in captured["args"]
     assert "--max-connection-per-server=4" in captured["args"]
     assert "--max-tries=10" in captured["args"]
-    assert "--retry-on-http-error=429,500,502,503,504" in captured["args"]
+    # aria2 1.37 on GitHub runners rejects this option and exits immediately.
+    assert not any(
+        arg.startswith("--retry-on-http-error") for arg in captured["args"]
+    )
 
 
 def test_aria2_http_retries_gofile_429(tmp_path, monkeypatch):
@@ -235,8 +253,36 @@ def test_aria2_http_reports_gofile_rate_limit(tmp_path, monkeypatch):
         )
     except DownloadError as exc:
         assert "rate-limiting" in str(exc)
+        assert "5 attempts" in str(exc)
     else:
         raise AssertionError("expected a rate-limit error")
+
+
+def test_aria2_http_does_not_retry_unrelated_errors(tmp_path, monkeypatch):
+    downloader = Downloader(make_settings(tmp_path), CancelToken())
+    calls = []
+    waits = []
+
+    def fake_run(args, dest, progress, *, label):
+        calls.append(label)
+        raise DownloadError(
+            "aria2c: unrecognized option '--retry-on-http-error=429,500,502,503,504'"
+        )
+
+    monkeypatch.setattr(downloader, "_run_aria2", fake_run)
+    monkeypatch.setattr("mirror.downloader._wait", lambda cancel, seconds: waits.append(seconds))
+    try:
+        downloader._aria2_http(
+            ResolvedLink(url="https://store10.gofile.io/file.bin", filename="file.bin"),
+            tmp_path,
+            lambda percent, detail: None,
+        )
+    except DownloadError as exc:
+        assert "unrecognized option" in str(exc)
+    else:
+        raise AssertionError("expected a download error")
+    assert len(calls) == 1
+    assert waits == []
 
 
 @responses.activate

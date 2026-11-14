@@ -49,6 +49,15 @@ READOUT_RE = re.compile(
 
 RETRYABLE_HTTP_STATUS = frozenset({429, 500, 502, 503, 504})
 
+# aria2 1.37 (the version shipped on GitHub's Ubuntu runners) does not support
+# --retry-on-http-error, so a 429 has to be retried by this outer loop.
+GOFILE_RETRY_DELAYS = (30, 60, 120, 240)
+
+_RATE_LIMIT_RE = re.compile(
+    r"(?:status|http(?: error)?)\s*[=:]?\s*429\b|too many requests|rate[ -]?limit",
+    re.IGNORECASE,
+)
+
 # Gofile rate-limits direct downloads per IP. Jobs run in parallel, so serialize
 # Gofile transfers instead of letting them trip 429 on each other.
 _GOFILE_DOWNLOAD_LOCK = threading.Semaphore(1)
@@ -74,8 +83,7 @@ def _retry_delay(response: requests.Response, default: float) -> float:
 
 
 def _looks_like_rate_limit(message: str) -> bool:
-    text = message.lower()
-    return "429" in text or "too many requests" in text or "rate limit" in text
+    return bool(_RATE_LIMIT_RE.search(message))
 
 
 def _wait(cancel: CancelToken, seconds: float) -> None:
@@ -224,7 +232,6 @@ class Downloader:
             "--min-split-size=1M",
             f"--max-tries={10 if gofile else 5}",
             f"--retry-wait={15 if gofile else 5}",
-            "--retry-on-http-error=429,500,502,503,504",
             "--connect-timeout=30",
             "--timeout=60",
             "--summary-interval=3",
@@ -239,7 +246,7 @@ class Downloader:
                 args.append(f"--header={key}: {value}")
         args.append(link.url)
 
-        attempts = 4 if gofile else 1
+        attempts = len(GOFILE_RETRY_DELAYS) + 1 if gofile else 1
         for attempt in range(1, attempts + 1):
             try:
                 self._run_aria2(args, dest, progress, label="download")
@@ -247,12 +254,19 @@ class Downloader:
             except DownloadError as exc:
                 if not gofile or not _looks_like_rate_limit(str(exc)):
                     raise
+                logger.warning(
+                    "Gofile download attempt %d/%d failed: %s",
+                    attempt,
+                    attempts,
+                    exc,
+                )
                 if attempt == attempts:
                     raise DownloadError(
-                        "Gofile is rate-limiting downloads right now. Wait a few minutes "
-                        "and try again, or set MAX_CONCURRENT_JOBS=1."
+                        "Gofile kept rate-limiting downloads after several retries "
+                        f"({attempts} attempts). Wait a few minutes and try again, "
+                        "or use Pixeldrain with /px."
                     ) from exc
-                delay = 30 * attempt
+                delay = GOFILE_RETRY_DELAYS[attempt - 1]
                 progress(None, f"Gofile is rate-limiting downloads. Retrying in {delay}s…")
                 _wait(self.cancel, delay)
 
