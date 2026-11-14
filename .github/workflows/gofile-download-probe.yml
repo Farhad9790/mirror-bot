@@ -13,6 +13,20 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install --quiet requests beautifulsoup4
+      - name: Check aria2 429 flag support
+        run: |
+          aria2c --version | head -3
+          aria2c --help=#all > /tmp/aria2help.txt 2>&1 || true
+          if grep -q 'retry-on-http-error' /tmp/aria2help.txt; then
+            echo "retry-on-http-error: SUPPORTED"
+          else
+            echo "retry-on-http-error: NOT SUPPORTED"
+          fi
+          set +e
+          aria2c --retry-on-http-error=429 --version > /tmp/aria2flag.txt 2>&1
+          echo "flag_exit=$?"
+          tail -3 /tmp/aria2flag.txt
+          set -e
       - name: Probe Gofile resolution and download
         env:
           GOFILE_TOKEN: ${{ secrets.GOFILE_TOKEN }}
