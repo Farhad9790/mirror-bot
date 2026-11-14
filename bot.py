@@ -51,10 +51,11 @@ TELEGRAM_FILE_LIMIT = 20 * 1024 * 1024
 
 # --------------------------------------------------------------------------- UI
 GROUP_CHAT_TYPES = frozenset({ChatType.GROUP, ChatType.SUPERGROUP})
+GROUP_ACCESS_TTL = 5 * 60
 
 
 def _authorized(update: Update, settings: Settings) -> bool:
-    """Private chats are owner-only; groups are open to their members."""
+    """Private chats are owner-only; trusted groups are open to their members."""
     user = update.effective_user
     if user is None:
         return False
@@ -62,6 +63,51 @@ def _authorized(update: Update, settings: Settings) -> bool:
     if chat is not None and getattr(chat, "type", None) in GROUP_CHAT_TYPES:
         return True
     return not settings.allowed_user_ids or user.id in settings.allowed_user_ids
+
+
+async def _group_has_owner(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    settings: Settings,
+) -> bool:
+    """A group is trusted only while one of the allowed users is a member."""
+    if not settings.allowed_user_ids:
+        return True
+
+    cache: dict[int, tuple[bool, float]] = context.application.bot_data.setdefault(
+        "group_access", {}
+    )
+    now = time.monotonic()
+    cached = cache.get(chat_id)
+    if cached is not None and now - cached[1] < GROUP_ACCESS_TTL:
+        return cached[0]
+
+    allowed = False
+    for owner_id in settings.allowed_user_ids:
+        try:
+            member = await context.bot.get_chat_member(chat_id, owner_id)
+        except TelegramError:
+            continue
+        if getattr(member, "status", None) not in {"left", "kicked"}:
+            allowed = True
+            break
+
+    cache[chat_id] = (allowed, now)
+    return allowed
+
+
+async def gate_group_access(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Ignore groups that none of the allowed users belong to."""
+    chat = update.effective_chat
+    if chat is None or getattr(chat, "type", None) not in GROUP_CHAT_TYPES:
+        return
+    settings: Settings = context.application.bot_data["settings"]
+    if await _group_has_owner(context, chat.id, settings):
+        return
+    logger.info("Ignoring group %s: no allowed user is a member", chat.id)
+    raise ApplicationHandlerStop
 
 
 async def _deny(update: Update, settings: Settings) -> None:
@@ -709,6 +755,7 @@ def _register(app: Application, settings: Settings, manager: JobManager) -> None
     app.bot_data["accepting_jobs"] = True
 
     app.add_handler(TypeHandler(Update, track_update), group=-1)
+    app.add_handler(TypeHandler(Update, gate_group_access), group=0)
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("gf", cmd_gf))

@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+import pytest
 from telegram.constants import ChatType
+from telegram.ext import ApplicationHandlerStop
 
 import bot
 from mirror.config import Settings
@@ -35,10 +37,29 @@ class FakeUpdate:
         self.callback_query = None
 
 
+class FakeMember:
+    def __init__(self, status: str) -> None:
+        self.status = status
+
+
+class FakeBot:
+    def __init__(self, statuses: dict[int, str] | None = None) -> None:
+        self.statuses = statuses or {}
+
+    async def get_chat_member(self, chat_id: int, user_id: int) -> FakeMember:
+        return FakeMember(self.statuses.get(user_id, "left"))
+
+
 class FakeContext:
-    def __init__(self, settings: Settings, args: list[str]) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        args: list[str],
+        bot_instance: FakeBot | None = None,
+    ) -> None:
         self.application = SimpleNamespace(bot_data={"settings": settings})
         self.args = args
+        self.bot = bot_instance or FakeBot()
 
 
 def run_command(
@@ -175,3 +196,25 @@ def test_id_is_denied_for_strangers():
     asyncio.run(bot.cmd_id(update, context))
     assert update.effective_message.replies
     assert "private" in update.effective_message.replies[0].lower()
+
+
+def test_group_gate_allows_group_with_owner():
+    settings = Settings(telegram_token="token", allowed_user_ids=frozenset({1}))
+    update = FakeUpdate(user_id=99, chat_type=ChatType.GROUP)
+    context = FakeContext(settings, [], FakeBot({1: "member"}))
+    asyncio.run(bot.gate_group_access(update, context))
+
+
+def test_group_gate_blocks_group_without_owner():
+    settings = Settings(telegram_token="token", allowed_user_ids=frozenset({1}))
+    update = FakeUpdate(user_id=99, chat_type=ChatType.SUPERGROUP)
+    context = FakeContext(settings, [], FakeBot({1: "left"}))
+    with pytest.raises(ApplicationHandlerStop):
+        asyncio.run(bot.gate_group_access(update, context))
+
+
+def test_group_gate_ignores_private_chats():
+    settings = Settings(telegram_token="token", allowed_user_ids=frozenset({1}))
+    update = FakeUpdate(user_id=99)
+    context = FakeContext(settings, [], FakeBot({1: "left"}))
+    asyncio.run(bot.gate_group_access(update, context))
