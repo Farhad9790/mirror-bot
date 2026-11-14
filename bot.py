@@ -754,8 +754,8 @@ def _register(app: Application, settings: Settings, manager: JobManager) -> None
     app.bot_data["state_lock"] = asyncio.Lock()
     app.bot_data["accepting_jobs"] = True
 
+    app.add_handler(TypeHandler(Update, gate_group_access), group=-2)
     app.add_handler(TypeHandler(Update, track_update), group=-1)
-    app.add_handler(TypeHandler(Update, gate_group_access), group=0)
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("gf", cmd_gf))

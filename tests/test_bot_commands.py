@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 from types import SimpleNamespace
 
 import pytest
+from telegram import Chat, Message, MessageEntity, Update, User
 from telegram.constants import ChatType
-from telegram.ext import ApplicationHandlerStop
+from telegram.ext import Application, ApplicationHandlerStop
 
 import bot
 from mirror.config import Settings
@@ -218,3 +220,72 @@ def test_group_gate_ignores_private_chats():
     update = FakeUpdate(user_id=99)
     context = FakeContext(settings, [], FakeBot({1: "left"}))
     asyncio.run(bot.gate_group_access(update, context))
+
+
+def _build_update(
+    chat_type: str,
+    *,
+    user_id: int = 1,
+    text: str = "/start",
+    update_id: int = 1,
+) -> Update:
+    command = text.split()[0]
+    message = Message(
+        message_id=update_id,
+        date=datetime.datetime.now(datetime.timezone.utc),
+        chat=Chat(id=user_id, type=chat_type),
+        from_user=User(id=user_id, first_name="User", is_bot=False),
+        text=text,
+        entities=[
+            MessageEntity(
+                type=MessageEntity.BOT_COMMAND,
+                offset=0,
+                length=len(command),
+            )
+        ],
+    )
+    return Update(update_id=update_id, message=message)
+
+
+def _build_dispatcher(monkeypatch, tmp_path, started):
+    app = Application.builder().token("123:abc").build()
+    app._initialized = True
+    app.bot._bot_user = User(
+        id=999, first_name="Bot", is_bot=True, username="testbot"
+    )
+    settings = Settings(
+        telegram_token="token",
+        allowed_user_ids=frozenset({1}),
+        state_file=tmp_path / "telegram.json",
+    )
+
+    async def fake_start(update, context):
+        started.append(update)
+
+    monkeypatch.setattr(bot, "cmd_start", fake_start)
+    bot._register(app, settings, object())
+    return app
+
+
+def _dispatch(app: Application, update: Update) -> None:
+    update.message.set_bot(app.bot)
+    asyncio.run(app.process_update(update))
+
+
+def test_gate_does_not_swallow_private_commands(monkeypatch, tmp_path):
+    started = []
+    app = _build_dispatcher(monkeypatch, tmp_path, started)
+    _dispatch(app, _build_update(ChatType.PRIVATE))
+    assert len(started) == 1
+
+
+def test_gate_blocks_group_commands_before_handlers(monkeypatch, tmp_path):
+    started = []
+    app = _build_dispatcher(monkeypatch, tmp_path, started)
+
+    async def no_owner(context, chat_id, settings):
+        return False
+
+    monkeypatch.setattr(bot, "_group_has_owner", no_owner)
+    _dispatch(app, _build_update(ChatType.GROUP, user_id=99))
+    assert not started
