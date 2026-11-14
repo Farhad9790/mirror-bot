@@ -50,10 +50,17 @@ logger = logging.getLogger(__name__)
 TELEGRAM_FILE_LIMIT = 20 * 1024 * 1024
 
 # --------------------------------------------------------------------------- UI
+GROUP_CHAT_TYPES = frozenset({ChatType.GROUP, ChatType.SUPERGROUP})
+
+
 def _authorized(update: Update, settings: Settings) -> bool:
+    """Private chats are owner-only; groups are open to their members."""
     user = update.effective_user
     if user is None:
         return False
+    chat = getattr(update, "effective_chat", None)
+    if chat is not None and getattr(chat, "type", None) in GROUP_CHAT_TYPES:
+        return True
     return not settings.allowed_user_ids or user.id in settings.allowed_user_ids
 
 
@@ -415,6 +422,10 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings: Settings = context.application.bot_data["settings"]
+    if not _authorized(update, settings):
+        await _deny(update, settings)
+        return
     user = update.effective_user
     chat = update.effective_chat
     if not user or not chat:

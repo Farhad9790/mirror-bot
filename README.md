@@ -33,7 +33,7 @@ Telegram link / .torrent / file
 - Pixeldrain uploads (`/px`) use your Pixeldrain API key, with the free plan allowing 10 GB per file and Pro allowing 100 GB per file.
 - Pixeldrain file links (`pixeldrain.com/u/...`) are downloaded through Pixeldrain's API. When `PIXELDRAIN_API_KEY` is set, the bot authenticates the download so a Pro/Prepaid account uses its own transfer quota instead of the shared free per-IP quota.
 - Progress bars, cancel buttons, per-user job limits, size limits and timeouts.
-- Private mode with `ALLOWED_USER_IDS`.
+- Private DMs are restricted to `ALLOWED_USER_IDS`; groups are open to their members. Channels are ignored.
 - Runs on GitHub Actions with automatic run hand-off, Docker, or any small VPS.
 
 ## Quick start on GitHub Actions
@@ -62,7 +62,7 @@ Telegram link / .torrent / file
    | Secret | Required | Purpose |
    |---|---|---|
    | `TELEGRAM_BOT_TOKEN` | yes | BotFather token |
-   | `ALLOWED_USER_IDS` | recommended | Comma-separated IDs, e.g. `123456789,987654321` |
+   | `ALLOWED_USER_IDS` | recommended | Comma-separated IDs allowed to DM the bot, e.g. `123456789,987654321`. Group members are allowed automatically. |
    | `GOFILE_TOKEN` | optional | Uses your Gofile account for uploads and share-link downloads instead of guest tokens |
    | `PIXELDRAIN_API_KEY` | optional | Required for `/px` uploads. Also authenticates Pixeldrain downloads; a Pro/Prepaid key uses the account's own transfer quota. |
 
@@ -138,7 +138,7 @@ The image includes aria2 and ffmpeg. Downloads and state live in `/data`.
 | Variable | Default | Description |
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | — | BotFather token (required) |
-| `ALLOWED_USER_IDS` | empty | Comma-separated Telegram user IDs. Empty means anyone can use the bot. |
+| `ALLOWED_USER_IDS` | empty | Comma-separated Telegram user IDs allowed to use the bot in private chats. Groups are open to their members. Empty means anyone can DM the bot. |
 | `GOFILE_TOKEN` | empty | Optional Gofile account token. Empty = guest uploads. |
 | `PIXELDRAIN_API_KEY` | empty | Pixeldrain API key. Required for `/px`; also used to authenticate Pixeldrain downloads. |
 | `MAX_FILE_SIZE` | `0` | Maximum downloaded file size; `0` = no bot-side limit |
@@ -167,6 +167,8 @@ The image includes aria2 and ffmpeg. Downloads and state live in `/data`.
 | `/id` | Show your Telegram user/chat ID |
 
 You can also send a link, a magnet link, a `.torrent` file, or any file directly. Files sent in Telegram are uploaded to Gofile; cloud bots can download attachments up to 20 MB. To mirror a file you already sent, reply to it with `/gf`, `/mirror`, or `/px`.
+
+In groups, use commands such as `/gf@YourBot <link>`. Plain links are ignored there so the bot does not reply to every message. Private chats are owner-only; groups are open to their members.
 
 ## Supported links
 
@@ -226,7 +228,7 @@ Pixeldrain's free plan allows uploads up to 10 GB per file and roughly 6 GB of d
 
 ## Security and legal notes
 
-- Set `ALLOWED_USER_IDS`. An open bot lets anyone use your runner, API keys and bandwidth.
+- Set `ALLOWED_USER_IDS`. In private chats the bot only answers those IDs; groups are open to every member, so only add it to groups you trust. Group members use your runner, bandwidth and upload accounts.
 - The bot blocks localhost/private-network URLs to reduce SSRF risk, but do not expose it to untrusted users.
 - Never commit `.env` or tokens. The GitHub Actions secrets are the right place.
 - Only mirror content you have the right to copy. Respect the terms of service of the source site, Gofile, and Pixeldrain.

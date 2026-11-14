@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+from telegram.constants import ChatType
+
 import bot
 from mirror.config import Settings
 
@@ -12,7 +14,9 @@ class FakeUser:
 
 
 class FakeChat:
-    id = 2
+    def __init__(self, chat_type: str = ChatType.PRIVATE) -> None:
+        self.id = 2
+        self.type = chat_type
 
 
 class FakeMessage:
@@ -24,9 +28,9 @@ class FakeMessage:
 
 
 class FakeUpdate:
-    def __init__(self) -> None:
-        self.effective_user = FakeUser()
-        self.effective_chat = FakeChat()
+    def __init__(self, user_id: int = 1, chat_type: str = ChatType.PRIVATE) -> None:
+        self.effective_user = SimpleNamespace(id=user_id)
+        self.effective_chat = FakeChat(chat_type)
         self.effective_message = FakeMessage()
         self.callback_query = None
 
@@ -37,13 +41,21 @@ class FakeContext:
         self.args = args
 
 
-def run_command(monkeypatch, command: str, args: list[str], **settings_kwargs):
+def run_command(
+    monkeypatch,
+    command: str,
+    args: list[str],
+    *,
+    user_id: int = 1,
+    chat_type: str = ChatType.PRIVATE,
+    **settings_kwargs,
+):
     settings = Settings(
         telegram_token="token",
         allowed_user_ids=frozenset({1}),
         **settings_kwargs,
     )
-    update = FakeUpdate()
+    update = FakeUpdate(user_id=user_id, chat_type=chat_type)
     context = FakeContext(settings, args)
     started = []
 
@@ -100,3 +112,66 @@ def test_px_requires_api_key(monkeypatch):
     assert not started
     assert update.effective_message.replies
     assert "PIXELDRAIN_API_KEY" in update.effective_message.replies[0]
+
+
+def test_owner_can_use_private_chat(monkeypatch):
+    update, started = run_command(monkeypatch, "gf", ["https://example.com/file.zip"])
+    assert len(started) == 1
+    assert not update.effective_message.replies
+
+
+def test_stranger_dm_is_denied(monkeypatch):
+    update, started = run_command(
+        monkeypatch,
+        "gf",
+        ["https://example.com/file.zip"],
+        user_id=99,
+    )
+    assert not started
+    assert update.effective_message.replies
+    assert "private" in update.effective_message.replies[0].lower()
+
+
+def test_group_members_can_use_the_bot(monkeypatch):
+    update, started = run_command(
+        monkeypatch,
+        "gf",
+        ["https://example.com/file.zip"],
+        user_id=99,
+        chat_type=ChatType.GROUP,
+    )
+    assert len(started) == 1
+    assert not update.effective_message.replies
+
+
+def test_supergroup_members_can_use_the_bot(monkeypatch):
+    update, started = run_command(
+        monkeypatch,
+        "mirror",
+        ["https://example.com/file.zip"],
+        user_id=99,
+        chat_type=ChatType.SUPERGROUP,
+    )
+    assert len(started) == 1
+    assert not update.effective_message.replies
+
+
+def test_channels_are_denied(monkeypatch):
+    update, started = run_command(
+        monkeypatch,
+        "gf",
+        ["https://example.com/file.zip"],
+        user_id=99,
+        chat_type=ChatType.CHANNEL,
+    )
+    assert not started
+    assert update.effective_message.replies
+
+
+def test_id_is_denied_for_strangers():
+    settings = Settings(telegram_token="token", allowed_user_ids=frozenset({1}))
+    update = FakeUpdate(user_id=99)
+    context = FakeContext(settings, [])
+    asyncio.run(bot.cmd_id(update, context))
+    assert update.effective_message.replies
+    assert "private" in update.effective_message.replies[0].lower()
